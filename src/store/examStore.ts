@@ -28,7 +28,17 @@ interface ExamState {
   currentQuestionIndex: number;
   answers: Record<string, any>;
   isFullscreen: boolean;
+  // `cheatWarnings` is kept as the combined total (lookingAwayWarnings +
+  // otherWarnings) purely for backward-compatible display/persistence -- it's
+  // what gets written to candidates.cheat_warnings and shown across the admin
+  // UI. It must never be compared against a cap on its own: LOOKING_AWAY is a
+  // documented false-positive-prone signal (see PROCTORING_RULEBOOK.md §3)
+  // and is capped independently from every other violation type, so a
+  // candidate can accumulate up to (lookingAwayCap + otherCap) total warnings
+  // before termination, not a single shared cap.
   cheatWarnings: number;
+  lookingAwayWarnings: number;
+  otherWarnings: number;
   mediaStream: MediaStream | null;
 
   // Actions
@@ -38,7 +48,8 @@ interface ExamState {
   setCurrentQuestionIndex: (index: number) => void;
   setAnswer: (questionId: string, answer: any) => void;
   setFullscreen: (val: boolean) => void;
-  incrementCheatWarning: () => void;
+  incrementLookingAwayWarning: () => void;
+  incrementOtherWarning: () => void;
   setMediaStream: (stream: MediaStream | null) => void;
 }
 
@@ -50,6 +61,8 @@ export const useExamStore = create<ExamState>((set) => ({
   answers: {},
   isFullscreen: false,
   cheatWarnings: 0,
+  lookingAwayWarnings: 0,
+  otherWarnings: 0,
   mediaStream: null,
 
   login: (candidate) => {
@@ -68,6 +81,8 @@ export const useExamStore = create<ExamState>((set) => ({
       answers: {},
       currentQuestionIndex: 0,
       cheatWarnings: 0,
+      lookingAwayWarnings: 0,
+      otherWarnings: 0,
       questions: [],
       mediaStream: null,
     };
@@ -80,6 +95,13 @@ export const useExamStore = create<ExamState>((set) => ({
       answers: { ...state.answers, [questionId]: answer }
     })),
   setFullscreen: (val) => set({ isFullscreen: val }),
-  incrementCheatWarning: () => set((state) => ({ cheatWarnings: state.cheatWarnings + 1 })),
+  incrementLookingAwayWarning: () => set((state) => {
+    const lookingAwayWarnings = state.lookingAwayWarnings + 1;
+    return { lookingAwayWarnings, cheatWarnings: lookingAwayWarnings + state.otherWarnings };
+  }),
+  incrementOtherWarning: () => set((state) => {
+    const otherWarnings = state.otherWarnings + 1;
+    return { otherWarnings, cheatWarnings: state.lookingAwayWarnings + otherWarnings };
+  }),
   setMediaStream: (stream) => set({ mediaStream: stream }),
 }));

@@ -59,7 +59,10 @@ const LANGUAGE_STARTERS: Record<string, string> = {
 export default function ExamDashboard() {
   const router = useRouter();
   
-  const { isAuthenticated, candidate, cheatWarnings, incrementCheatWarning, logout, mediaStream } = useExamStore();
+  const {
+    isAuthenticated, candidate, lookingAwayWarnings, otherWarnings,
+    incrementLookingAwayWarning, incrementOtherWarning, logout, mediaStream
+  } = useExamStore();
   
   // Real auth tracking - no more "anonymous" fallbacks
   const sessionId = candidate ? `session-${candidate.id}` : ""; 
@@ -180,7 +183,7 @@ export default function ExamDashboard() {
            persistCheatWarning(1);
            handleViolationSubmit("Tab Switch (Strict Violation)", 'VIOLATION_HIGH_SEVERITY');
         } else {
-           incrementCheatWarning();
+           incrementOtherWarning();
            persistCheatWarning(useExamStore.getState().cheatWarnings);
            setShowWarningModal(true);
         }
@@ -195,7 +198,7 @@ export default function ExamDashboard() {
              persistCheatWarning(1);
              handleViolationSubmit("Fullscreen Exit (Strict Violation)", 'VIOLATION_HIGH_SEVERITY');
           } else {
-             incrementCheatWarning();
+             incrementOtherWarning();
              persistCheatWarning(useExamStore.getState().cheatWarnings);
              setShowWarningModal(true);
           }
@@ -215,11 +218,11 @@ export default function ExamDashboard() {
       document.removeEventListener("copy", blockEvent);
       document.removeEventListener("paste", blockEvent);
     };
-  }, [incrementCheatWarning, settings, isSubmitted, isTerminated]);
+  }, [incrementOtherWarning, settings, isSubmitted, isTerminated]);
 
   // Webcam/Mic Proctoring: routes through the exact same warning/escalation
-  // chain as tab-switch/fullscreen above (incrementCheatWarning ->
-  // persistCheatWarning -> warn-modal or handleViolationSubmit), per
+  // chain as tab-switch/fullscreen above (increment{LookingAway,Other}Warning
+  // -> persistCheatWarning -> warn-modal or handleViolationSubmit), per
   // PROCTORING_RULEBOOK.md. LOOKING_AWAY is hard-wired to never hit the
   // HIGH-severity instant-submit branch, regardless of drive severity --
   // webcam gaze detection has well-documented false-positive rates even in
@@ -246,7 +249,11 @@ export default function ExamDashboard() {
       persistCheatWarning(1);
       handleViolationSubmit(SUBMIT_REASONS[type], 'VIOLATION_HIGH_SEVERITY');
     } else {
-      incrementCheatWarning();
+      if (type === "LOOKING_AWAY") {
+        incrementLookingAwayWarning();
+      } else {
+        incrementOtherWarning();
+      }
       persistCheatWarning(useExamStore.getState().cheatWarnings);
       setShowWarningModal(true);
     }
@@ -260,6 +267,33 @@ export default function ExamDashboard() {
     enabled: !!settings?.webcamProctoringEnabled && !isSubmitted && !isTerminated,
     onViolation: handleProctoringViolation,
   });
+
+  // Auto-submit once EITHER category's cap is reached: LOOKING_AWAY warnings
+  // and every other violation type (tab-switch, fullscreen-exit, NO_FACE,
+  // MULTIPLE_FACES, HIGH_NOISE) are capped independently, per
+  // PROCTORING_RULEBOOK.md's "warn-only" carve-out for LOOKING_AWAY -- a
+  // candidate should never lose their exam to one misfired head-turn
+  // heuristic, but also shouldn't be able to rack up 7, 12+ warnings and keep
+  // going just because no single legacy shared counter ever tripped.
+  //
+  // Runs reactively (not only inside the warning modal's "Acknowledge &
+  // Resume" click handler) so the cap can't be dodged by leaving the modal
+  // open indefinitely, and applies to both MEDIUM and LOW severity drives --
+  // previously this check was hard-gated to `proctoringSeverity === 'MEDIUM'`
+  // only, so LOW-severity drives never enforced any cap at all regardless of
+  // how high the warning count climbed. HIGH-severity drives never reach
+  // here for non-LOOKING_AWAY violations (they hard-terminate on the first
+  // hit above), so this effect is a no-op for them except via LOOKING_AWAY,
+  // which is intentional.
+  useEffect(() => {
+    if (isSubmitted || isTerminated || !settings) return;
+    const cap = settings.maxCheatWarnings ?? 3;
+    if (lookingAwayWarnings >= cap || otherWarnings >= cap) {
+      setShowWarningModal(false);
+      handleViolationSubmit("Max Warnings Exceeded", 'VIOLATION_MEDIUM_CAP');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lookingAwayWarnings, otherWarnings, settings, isSubmitted, isTerminated]);
 
   // Visible self-view feed: purely cosmetic, reuses the same granted stream
   // the detection hook above already consumes -- no second camera request.
@@ -658,10 +692,12 @@ export default function ExamDashboard() {
              <DialogDescription render={<div />} className="text-base text-foreground/80 mt-2">
                 {violationMessage}
                 <br/><br/>
-                {settings?.proctoringSeverity === 'MEDIUM' ? (
+                {settings?.proctoringSeverity !== 'HIGH' ? (
                    <span className="font-bold text-destructive">
-                     WARNING {cheatWarnings} / {settings?.maxCheatWarnings}. 
-                     Next violation will terminate your session.
+                     Looking-away warnings: {lookingAwayWarnings} / {settings?.maxCheatWarnings}.{" "}
+                     Other warnings: {otherWarnings} / {settings?.maxCheatWarnings}.
+                     <br/>
+                     Reaching either limit will terminate your session.
                    </span>
                 ) : (
                   "Multiple violations will lead to automatic submission."
@@ -670,10 +706,10 @@ export default function ExamDashboard() {
           </DialogHeader>
           <DialogFooter className="sm:justify-center pb-2 pt-6 bg-destructive/5 border-destructive/20">
              <Button variant="destructive" className="w-full h-12 font-bold shadow-2xl shadow-destructive/20" onClick={() => {
+                // Just dismiss -- the cap check runs reactively (see the
+                // useEffect on lookingAwayWarnings/otherWarnings above), so it
+                // fires even if this button is never clicked.
                 setShowWarningModal(false);
-                if (settings?.proctoringSeverity === 'MEDIUM' && cheatWarnings >= settings?.maxCheatWarnings) {
-                   handleViolationSubmit("Max Warnings Exceeded", 'VIOLATION_MEDIUM_CAP');
-                }
              }}>
                 Acknowledge & Resume
              </Button>

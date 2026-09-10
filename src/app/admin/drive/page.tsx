@@ -3,7 +3,7 @@
 import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { DragDropContext, Droppable, Draggable, DropResult } from "@hello-pangea/dnd";
-import { Download, GripVertical, FileText, CheckCircle2, User, Cpu, MessageSquare, Code, Presentation, AlertTriangle, Video, Trash2 } from "lucide-react";
+import { Download, GripVertical, FileText, CheckCircle2, User, Cpu, MessageSquare, Code, Presentation, AlertTriangle, Video, Trash2, Search } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -62,6 +62,13 @@ function DriveKanbanBoardInner() {
   const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null);
   const [drives, setDrives] = useState<any[]>([]);
   const [selectedDriveId, setSelectedDriveId] = useState<string>("all");
+
+  // Tech Round resume search + bulk/individual download. Search is purely a
+  // visual filter (candidates are hidden, not removed from the array), so
+  // drag-and-drop indices into columns['col-2'] stay correct even while a
+  // search is active -- see the render below.
+  const [techSearchQuery, setTechSearchQuery] = useState("");
+  const [isDownloadingResumes, setIsDownloadingResumes] = useState(false);
 
   // Evaluation States
   const [activeTechNotes, setActiveTechNotes] = useState("");
@@ -162,6 +169,65 @@ function DriveKanbanBoardInner() {
     });
 
     doc.save(`Naprocs_Roster_${stageTitle.replace(/\s+/g, '_')}.pdf`);
+  };
+
+  const matchesTechSearch = (c: Candidate) => {
+    const q = techSearchQuery.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      c.name?.toLowerCase().includes(q) ||
+      c.collegeRollNumber?.toLowerCase().includes(q) ||
+      c.email?.toLowerCase().includes(q)
+    );
+  };
+
+  const techColumnCandidates = columns["col-2"] || [];
+  const visibleTechCandidates = techColumnCandidates.filter(matchesTechSearch);
+
+  // Empty search -> everyone in Tech Round (a ZIP). Narrowed to exactly one
+  // match -> that single resume, downloaded directly (no zip). Narrowed to a
+  // subset of 2+ -> a ZIP of just that subset. The server decides the actual
+  // single-vs-zip response shape based on how many candidates actually have a
+  // resume on file, but the button label reflects what the admin sees here.
+  const handleDownloadTechResumes = async () => {
+    if (visibleTechCandidates.length === 0 || isDownloadingResumes) return;
+    setIsDownloadingResumes(true);
+    try {
+      const res = await fetch("/api/admin/candidates/resumes/download", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ candidateIds: visibleTechCandidates.map((c) => c._id) }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to prepare resume download");
+      }
+
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") || "";
+      const match = disposition.match(/filename="?([^"]+)"?/);
+      const filename = match?.[1] || (visibleTechCandidates.length === 1 ? "resume.pdf" : "tech-round-resumes.zip");
+      const skipped = Number(res.headers.get("X-Skipped-Count") || "0");
+
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+
+      if (skipped > 0) {
+        alert(`${skipped} candidate(s) had no resume on file (or it failed to download) and were skipped.`);
+      }
+    } catch (e: any) {
+      console.error("Resume download failure:", e);
+      alert(e.message || "Failed to download resumes. Please try again.");
+    } finally {
+      setIsDownloadingResumes(false);
+    }
   };
 
   const onDragEnd = async (result: DropResult) => {
@@ -381,14 +447,47 @@ function DriveKanbanBoardInner() {
                     </Badge>
                   </div>
                   {col.hasExport && (
-                    <Button 
-                      variant="outline" 
-                      size="sm" 
+                    <Button
+                      variant="outline"
+                      size="sm"
                       onClick={() => generatePDFExport(col.id, col.exportLabel || col.title)}
                       className="w-full border-primary/20 bg-primary/5 text-primary hover:bg-primary/10 transition-colors shrink-0"
                     >
                       <Download className="h-4 w-4 mr-2" /> Export {col.exportLabel} (PDF)
                     </Button>
+                  )}
+
+                  {col.dbStage === "TECH_ROUND" && (
+                    <div className="space-y-2">
+                      <div className="relative">
+                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/50" />
+                        <input
+                          type="text"
+                          value={techSearchQuery}
+                          onChange={(e) => setTechSearchQuery(e.target.value)}
+                          placeholder="Search name, roll no, email..."
+                          className="w-full h-8 pl-8 pr-2 text-xs rounded-md border border-border/50 bg-background/50 focus:outline-none focus:ring-1 focus:ring-primary/40"
+                        />
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={isDownloadingResumes || visibleTechCandidates.length === 0}
+                        onClick={handleDownloadTechResumes}
+                        className="w-full border-emerald-500/20 bg-emerald-500/5 text-emerald-600 hover:bg-emerald-500/10 transition-colors shrink-0"
+                      >
+                        <Download className="h-4 w-4 mr-2" />
+                        {isDownloadingResumes
+                          ? "Preparing..."
+                          : visibleTechCandidates.length === 0
+                          ? "No Resumes"
+                          : visibleTechCandidates.length === techColumnCandidates.length
+                          ? `Download All Resumes (${techColumnCandidates.length})`
+                          : visibleTechCandidates.length === 1
+                          ? "Download Resume"
+                          : `Download Selected (${visibleTechCandidates.length})`}
+                      </Button>
+                    </div>
                   )}
                 </div>
 
@@ -401,7 +500,15 @@ function DriveKanbanBoardInner() {
                       className={`flex-1 overflow-y-auto p-2 rounded-xl transition-colors border ${snapshot.isDraggingOver ? 'bg-primary/5 border-primary/30 border-dashed' : 'bg-card/20 border-border/20'}`}
                     >
                       <AnimatePresence>
-                        {columns[col.id].map((candidate, index) => (
+                        {columns[col.id].map((candidate, index) => {
+                          // Tech Round search is a visual filter only -- a
+                          // non-matching card is hidden (not removed from the
+                          // array), so its Draggable `index` still matches its
+                          // real position in columns['col-2'] and drag/drop
+                          // (which splices by index) keeps working correctly
+                          // even while a search is active.
+                          const hiddenBySearch = col.dbStage === "TECH_ROUND" && !matchesTechSearch(candidate);
+                          return (
                           <Draggable key={candidate._id} draggableId={candidate._id} index={index}>
                             {(provided, snapshot) => (
                               <div
@@ -409,6 +516,7 @@ function DriveKanbanBoardInner() {
                                 {...provided.draggableProps}
                                 {...provided.dragHandleProps}
                                 style={{ ...provided.draggableProps.style }}
+                                hidden={hiddenBySearch && !snapshot.isDragging}
                                 onClick={() => handleOpenSheet(candidate)}
                               >
                                 <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="group">
@@ -431,7 +539,8 @@ function DriveKanbanBoardInner() {
                               </div>
                             )}
                           </Draggable>
-                        ))}
+                          );
+                        })}
                       </AnimatePresence>
                       {provided.placeholder}
                     </div>

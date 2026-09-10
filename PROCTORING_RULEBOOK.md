@@ -30,8 +30,35 @@ stores whatever snapshot and event type the browser already decided to send.
 | `SNAPSHOT` | n/a — always fires | every 60s | n/a | Not a violation. Baseline evidence that the candidate was present throughout, independent of any flag. |
 | `NO_FACE` | MediaPipe Face Landmarker, face count = 0 | absent ≥5 consecutive seconds | 20s before re-flagging | Full severity chain — can trigger a HIGH-severity drive's instant auto-submit. |
 | `MULTIPLE_FACES` | face count ≥2 (`numFaces: 3`, `minFaceDetectionConfidence: 0.4` — see §3a) | present ≥3 consecutive seconds | 20s | Full severity chain. |
-| `LOOKING_AWAY` | coarse head-yaw proxy (see §3) | sustained ≥5 consecutive seconds | 20s | **Warn-only.** Always routes through the MEDIUM/LOW branch (adds to `cheat_warnings`), **never** the HIGH instant-submit branch — regardless of the drive's configured severity. |
+| `LOOKING_AWAY` | coarse head-yaw proxy (see §3) | sustained ≥5 consecutive seconds | 20s | **Warn-only.** Always routes through the MEDIUM/LOW branch, **never** the HIGH instant-submit branch — regardless of the drive's configured severity. |
 | `HIGH_NOISE` | Web Audio `AnalyserNode` RMS volume (mic requested with `echoCancellation`/`noiseSuppression`/`autoGainControl` explicitly **off** — see note below) | above threshold ≥3 consecutive seconds | 20s | Full severity chain. No audio is ever recorded, buffered, or uploaded — only this derived boolean. |
+
+### 2b. Two independent warning caps, not one shared counter
+
+**FIXED 2026-09-10.** `cheat_warnings` (the number persisted per candidate and shown in the
+admin UI) is a *combined total*, but the cap that actually decides auto-submission is split
+into two independent counters, each checked against `settings.maxCheatWarnings` (per-drive
+config, default `3`):
+
+- **`lookingAwayWarnings`** — only `LOOKING_AWAY` increments this one.
+- **`otherWarnings`** — every other MEDIUM/LOW-branch violation (`NO_FACE`, `MULTIPLE_FACES`,
+  `HIGH_NOISE`, tab-switch, fullscreen-exit) increments this one.
+
+A drive auto-submits as soon as **either** counter reaches the cap — e.g. with the default
+cap of 3, a candidate can accumulate up to 3 looking-away warnings *and* 3 of everything else
+(6 total) before termination, but 3 tab-switches alone is already enough, independent of how
+many looking-away warnings also happened. This is what keeps `LOOKING_AWAY`'s
+false-positive-prone signal (§3) from either being ignored (too lenient) or from silently
+eating into a shared budget that then also blocks the candidate for genuine violations of a
+completely different kind (too strict/confusing).
+
+Previously both categories fed one shared `cheatWarnings` counter, and the auto-submit check
+itself was only ever wired up for `proctoringSeverity === 'MEDIUM'` — `LOW`-severity drives
+(a normal, admin-selectable option) never enforced any cap at all, so a candidate's warning
+count could climb past the configured max (7, 12, arbitrarily high) with the exam never
+auto-submitting. See `useEffect` on `lookingAwayWarnings`/`otherWarnings` in
+`src/app/exam/dashboard/page.tsx` for the current (reactive, severity-agnostic-except-HIGH)
+check.
 
 All constants live in one place: `src/hooks/useProctoringCapture.ts`, top of file. Changing
 a number means editing it there **and** this table in the same change.
