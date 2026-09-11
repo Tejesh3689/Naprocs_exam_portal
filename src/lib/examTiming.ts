@@ -166,6 +166,7 @@ export async function finalizeSession(params: {
 
       if (isPistonLanguage(language)) {
         let passedCount = 0;
+        let hadInfraFailure = false;
         for (const tc of testCases) {
           try {
             const { stdout, exitCode } = await executeViaPiston(language, studentCode, (tc.input || "").toString());
@@ -175,7 +176,24 @@ export async function finalizeSession(params: {
             }
           } catch (e: any) {
             console.error(`Piston Scoring Failure for Q ${q.id}:`, e.message);
+            hadInfraFailure = true;
           }
+        }
+        // This re-grading pass is the one moment ALL candidates hit Piston at
+        // once (a synchronized final submit, e.g. everyone's time expiring
+        // together) -- exactly the load pattern that saturates the
+        // self-hosted Piston droplet's (still limited, see pistonExecute.ts)
+        // concurrency budget. A thrown error here means Piston genuinely
+        // couldn't be reached/was too busy for that test case -- NOT that the
+        // code was wrong -- so don't let it silently outscore-downgrade a
+        // candidate who already proved their code correct via their own
+        // earlier "Run Tests" click. Only trusts the client's prior result
+        // when it's actually HIGHER than this (degraded) recount, and only
+        // when an infra failure was actually observed -- mirrors the same
+        // fallback-to-client-reported-testsPassed pattern already used below
+        // for the JS vm path's total-failure case.
+        if (hadInfraFailure && typeof userRes?.testsPassed === "number" && userRes.testsPassed > passedCount) {
+          passedCount = userRes.testsPassed;
         }
         totalScore += Math.floor((passedCount / testCases.length) * 10);
         finalResponses[q.id] = { ...userRes, testsPassed: passedCount, totalTests: testCases.length };
