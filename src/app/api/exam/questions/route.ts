@@ -42,9 +42,47 @@ export async function GET(req: Request) {
     }
 
     // 2. Initialize or Resume Exam Session
-    const { data: existingSession, error: sessionLookupError } = await supabase
-      .from("exam_sessions").select("*").eq("candidate_id", candidateId).eq("status", "IN_PROGRESS").maybeSingle();
+    //
+    // Deliberately NOT `.maybeSingle()` on this query: it throws outright if
+    // 2+ rows match, and duplicate IN_PROGRESS rows for one candidate are a
+    // real, reproduced scenario -- two near-simultaneous requests (StrictMode
+    // double-fire, a slow network prompting a retry, two tabs) can each see
+    // "no existing session" and both INSERT one below. migration
+    // 010_exam_session_uniqueness.sql adds a DB-level unique index to stop
+    // that at the source, but until/unless that migration is actually applied
+    // (confirmed via direct testing 2026-09-11: it was NOT yet applied on
+    // this project, so the race is still live today), this lookup must
+    // survive duplicates that already exist rather than 500 on every future
+    // request for that candidate forever -- reproduced exactly that: 10
+    // concurrent first-load requests each created their own session (10
+    // distinct IDs, all HTTP 200), and the very next single request 500'd
+    // outright on this line once duplicates existed, with no self-heal.
+    //
+    // Fix: fetch all IN_PROGRESS rows ordered oldest-first, treat the oldest
+    // as canonical (the one most likely already seen by the candidate's
+    // first successful load), and quietly terminate any strays so this
+    // self-heals going forward instead of staying permanently broken for
+    // that candidate.
+    const { data: inProgressSessions, error: sessionLookupError } = await supabase
+      .from("exam_sessions")
+      .select("*")
+      .eq("candidate_id", candidateId)
+      .eq("status", "IN_PROGRESS")
+      .order("created_at", { ascending: true });
     if (sessionLookupError) throw sessionLookupError;
+
+    const existingSession = inProgressSessions?.[0] || null;
+    if (inProgressSessions && inProgressSessions.length > 1) {
+      const strayIds = inProgressSessions.slice(1).map((s) => s.id);
+      console.error(
+        `Found ${inProgressSessions.length} duplicate IN_PROGRESS sessions for candidate ${candidateId}; keeping oldest (${existingSession.id}), terminating ${strayIds.length} stray(s).`
+      );
+      const { error: cleanupError } = await supabase
+        .from("exam_sessions")
+        .update({ status: "TERMINATED" })
+        .in("id", strayIds);
+      if (cleanupError) console.error("Failed to clean up stray duplicate sessions:", cleanupError.message);
+    }
 
     // Lazy-sweep: if this "in progress" session actually ran past its
     // deadline (browser was closed, tab was backgrounded and throttled past
@@ -128,9 +166,19 @@ export async function GET(req: Request) {
       // a few hundred candidates' actual time-up moments across a 15s window
       // costs each of them a negligible, undetectable sliver of their exam
       // duration, in exchange for a meaningfully smaller peak burst.
+      // Found by edge-case testing (2026-09-11): a candidate joining with
+      // only a few seconds left in the drive's exam_end window could have
+      // jitter subtract them straight into a PAST deadline -- an immediate,
+      // confusing auto-submit the instant they load the dashboard, the exact
+      // opposite of the intended "imperceptible sliver" tradeoff. Clamp
+      // jitter so it never eats into the last MIN_SESSION_MS of whatever
+      // time this candidate actually has, however little that is.
       const JITTER_MAX_MS = 15_000;
-      const jitterMs = Math.floor(Math.random() * JITTER_MAX_MS);
-      const deadline = new Date(Math.min(startTime.getTime() + durationMs, driveEndMs) - jitterMs);
+      const MIN_SESSION_MS = 5_000;
+      const uncappedDeadlineMs = Math.min(startTime.getTime() + durationMs, driveEndMs);
+      const availableForJitter = Math.max(0, uncappedDeadlineMs - startTime.getTime() - MIN_SESSION_MS);
+      const jitterMs = Math.floor(Math.random() * Math.min(JITTER_MAX_MS, availableForJitter));
+      const deadline = new Date(uncappedDeadlineMs - jitterMs);
 
       // Store the specific IDs in the session so they don't change on refresh.
       // Guarded against a race where two near-simultaneous requests for the

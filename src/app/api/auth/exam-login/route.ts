@@ -82,12 +82,21 @@ export async function POST(req: Request) {
     // dead dashboard. This is what actually surfaces abandoned sessions to
     // admins as COMPLETED/ABANDONED_TIMEOUT instead of stuck IN_PROGRESS
     // forever -- see src/lib/examTiming.ts.
-    const { data: activeSession } = await supabase
+    //
+    // Not `.maybeSingle()`: duplicate IN_PROGRESS rows for one candidate are
+    // a real, reproduced scenario (see the matching fix + comment in
+    // src/app/api/exam/questions/route.ts) -- `.maybeSingle()` here would
+    // silently discard its error and just skip the sweep entirely for an
+    // affected candidate (this destructure doesn't even check `error`),
+    // rather than crash, but still means an abandoned duplicate never gets
+    // swept. Same oldest-row-is-canonical resolution as the other call site.
+    const { data: activeSessions } = await supabase
       .from("exam_sessions")
       .select("*")
       .eq("candidate_id", candidate.id)
       .eq("status", "IN_PROGRESS")
-      .maybeSingle();
+      .order("created_at", { ascending: true });
+    const activeSession = activeSessions?.[0] || null;
     if (activeSession) {
       const { swept } = await sweepIfExpired(activeSession);
       if (swept) {
