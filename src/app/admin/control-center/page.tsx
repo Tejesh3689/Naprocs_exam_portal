@@ -5,8 +5,10 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
   Activity, AlertTriangle, Search, RefreshCw,
-  RotateCcw, Trash2, Loader2, UserCheck, Video, Camera, ShieldAlert, ArrowRight
+  RotateCcw, Trash2, Loader2, UserCheck, Video, Camera, ShieldAlert, ArrowRight, Download
 } from "lucide-react";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -20,6 +22,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ConfirmActionDialog } from "@/components/admin/ConfirmActionDialog";
 import { PROCTORING_FLAG_TYPES as FLAG_TYPES, PROCTORING_FLAG_BY_EVENT_TYPE as FLAG_BY_EVENT_TYPE } from "@/lib/proctoringFlags";
 import { ProctoringLightbox } from "@/components/proctoring/ProctoringLightbox";
+import { formatToIST } from "@/lib/time";
 
 // Unifies the old "Live Control Center" (activity/stage/cheat-warnings,
 // every drive mixed together, no in-progress candidates) and "Proctoring
@@ -31,7 +34,7 @@ const ADMIN_POLL_INTERVAL_MS = 15_000;
 const ACTIVE_WINDOW_MS = 120_000;
 
 type WritingStatus = "WRITING" | "COMPLETED" | "NOT_STARTED";
-type FilterTab = "WRITING" | "COMPLETED" | "ALL";
+type FilterTab = "WRITING" | "COMPLETED" | "NOT_STARTED" | "ALL";
 
 function LiveMonitoringPage() {
   const searchParams = useSearchParams();
@@ -57,6 +60,8 @@ function LiveMonitoringPage() {
 
   const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  const [isExportingRoster, setIsExportingRoster] = useState(false);
 
   // Load the drive list once, preferring ?driveId= from the URL (e.g. a
   // link from the Recruitment Drives card) over the first drive found.
@@ -197,8 +202,56 @@ function LiveMonitoringPage() {
 
   const writingCount = roster.filter((c) => c.writingStatus === "WRITING").length;
   const completedCount = roster.filter((c) => c.writingStatus === "COMPLETED").length;
+  const notStartedCount = roster.filter((c) => c.writingStatus === "NOT_STARTED").length;
   const anomaliesCount = roster.reduce((acc, c) => acc + (c.cheatWarnings || 0), 0);
   const flagsCount = roster.reduce((acc, c) => acc + (c.noFace || 0) + (c.multipleFaces || 0) + (c.lookingAway || 0) + (c.highNoise || 0), 0);
+
+  // Exports whatever the admin is currently looking at -- e.g. switch to the
+  // "Registered / Not Started" tab to get exactly the list colleges ask for
+  // (who signed up on our link but hasn't sat the exam yet), or "All" for
+  // the full roster. Reuses the roster already fetched for this page -- no
+  // extra request.
+  const exportRosterPDF = () => {
+    if (filteredRoster.length === 0 || isExportingRoster) return;
+    setIsExportingRoster(true);
+    try {
+      const tabLabel = filterTab === "NOT_STARTED" ? "Registered (Not Yet Started)"
+        : filterTab === "WRITING" ? "Writing Now"
+        : filterTab === "COMPLETED" ? "Completed"
+        : "All Candidates";
+
+      const doc = new jsPDF();
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(18);
+      doc.text(`${selectedDrive?.title || "Drive"} -- ${tabLabel}`, 14, 20);
+
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "normal");
+      if (selectedDrive?.slug) doc.text(`Registration link: /register/${selectedDrive.slug}`, 14, 28);
+      doc.text(`Generated: ${formatToIST(new Date())}   |   Total: ${filteredRoster.length}`, 14, 34);
+
+      const tableData = filteredRoster.map((c, i) => [
+        String(i + 1),
+        c.name,
+        c.email,
+        c.collegeRollNumber,
+        c.writingStatus === "NOT_STARTED" ? "Registered (Pending)" : c.writingStatus === "WRITING" ? "Writing Now" : "Completed",
+      ]);
+
+      autoTable(doc, {
+        startY: 40,
+        head: [['#', 'Name', 'Email', 'Roll No.', 'Status']],
+        body: tableData,
+        theme: 'grid',
+        headStyles: { fillColor: [46, 204, 113] },
+        styles: { fontSize: 9 },
+      });
+
+      doc.save(`${(selectedDrive?.slug || "roster")}_${filterTab.toLowerCase()}.pdf`);
+    } finally {
+      setIsExportingRoster(false);
+    }
+  };
 
   const filteredRoster = roster
     .filter((c) => filterTab === "ALL" || c.writingStatus === filterTab)
@@ -352,6 +405,7 @@ function LiveMonitoringPage() {
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 p-6 border-b border-border/40">
             <Tabs value={filterTab} onValueChange={(v) => setFilterTab((v as FilterTab) || "ALL")}>
               <TabsList>
+                <TabsTrigger value="NOT_STARTED">Registered ({notStartedCount})</TabsTrigger>
                 <TabsTrigger value="WRITING">Writing Now ({writingCount})</TabsTrigger>
                 <TabsTrigger value="COMPLETED">Completed ({completedCount})</TabsTrigger>
                 <TabsTrigger value="ALL">All ({roster.length})</TabsTrigger>
@@ -367,6 +421,16 @@ function LiveMonitoringPage() {
                   className="pl-9 bg-background/40 border-border/40 h-10 text-xs"
                 />
               </div>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={filteredRoster.length === 0 || isExportingRoster}
+                onClick={exportRosterPDF}
+                className="h-10 shrink-0 border-primary/20 bg-primary/5 text-primary hover:bg-primary/10 transition-colors"
+              >
+                <Download className="h-4 w-4 mr-2" />
+                {isExportingRoster ? "Exporting..." : "Export (PDF)"}
+              </Button>
               <Button variant="outline" size="icon" onClick={refetchRoster} className="h-10 w-10 shrink-0">
                 <RefreshCw className={`h-4 w-4 ${isSyncing ? "animate-spin" : ""}`} />
               </Button>
