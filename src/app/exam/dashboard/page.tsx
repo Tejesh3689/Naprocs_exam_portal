@@ -80,7 +80,8 @@ export default function ExamDashboard() {
     isSyncing,
     recoveredSessionId,
     deadline,
-    sessionExpired
+    sessionExpired,
+    loadError
   } = useExamSync(candidateId, sessionId);
 
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
@@ -652,6 +653,25 @@ export default function ExamDashboard() {
             </div>
           </Card>
         </motion.div>
+      </div>
+    );
+  }
+
+  // 2a. Load Error View -- distinct from the loading spinner below on
+  // purpose. Before this, any hydration failure other than "session expired"
+  // (empty question bank, a 500, a network error) left `questions` at `[]`
+  // forever with no error surfaced, so this exact screen kept showing
+  // "Initializing..." indefinitely with zero way for the candidate (or
+  // support, reading a bug report) to tell "still loading" apart from
+  // "loaded, and it's broken." See the 2026-09-09 SVCE incident.
+  if (loadError) {
+    return (
+      <div className="h-screen w-full flex flex-col items-center justify-center bg-background text-center p-8 space-y-4">
+        <AlertTriangle className="h-10 w-10 text-destructive" />
+        <p className="font-mono text-destructive max-w-lg">{loadError}</p>
+        <Button variant="outline" onClick={() => window.location.reload()}>
+          Retry
+        </Button>
       </div>
     );
   }

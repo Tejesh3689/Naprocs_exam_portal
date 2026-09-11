@@ -49,3 +49,10 @@ next-env.d.ts
  
 # uploads
 /public/uploads
+
+# load-test run artifacts (transient state + reports for scripts_loadtest/*.mjs)
+scripts_loadtest/loadtest_state.json
+scripts_loadtest/report_*.json
+
+# local Supabase CLI cache (e.g. `npx supabase --version`) -- not project data
+/supabase/.temp/

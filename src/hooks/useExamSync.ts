@@ -13,6 +13,15 @@ export function useExamSync(candidateId: string, sessionId: string) {
   // server-side, and never recomputed on the client. See src/lib/examTiming.ts.
   const [deadline, setDeadline] = useState<string | null>(null);
   const [sessionExpired, setSessionExpired] = useState(false);
+  // Any hydration failure that ISN'T the "session expired" case -- an empty
+  // question bank (503 EMPTY_QUESTION_BANK / UNRESOLVABLE_SESSION_QUESTIONS),
+  // a 500, a 404, a network error. Previously there was no `else` branch here
+  // at all: any of these left `questions` at `[]` forever with zero visible
+  // error, indistinguishable from "still loading" -- see the 2026-09-09 SVCE
+  // incident (dashboard just shows "Initializing Secure Sandbox
+  // Environment..." either way). Surfacing this lets the dashboard render a
+  // distinct, actionable error state instead.
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const responsesRef = useRef(responses);
 
@@ -47,9 +56,20 @@ export function useExamSync(candidateId: string, sessionId: string) {
            // deadline (abandoned/expired) -- surface it so the dashboard can
            // show a clear "session expired" state instead of a blank/broken UI.
            setSessionExpired(true);
+        } else {
+           // Any other failure shape (empty question bank, a 500, a 404 --
+           // see route.ts's EMPTY_QUESTION_BANK / UNRESOLVABLE_SESSION_QUESTIONS
+           // codes, or any thrown exception's generic 500). Include whatever
+           // reference the server gave (session ID, drive title) so a
+           // candidate has something concrete to hand support.
+           const ref = data.sessionId ? ` (session ${data.sessionId})` : data.driveTitle ? ` (${data.driveTitle})` : "";
+           setLoadError((data.error || "Failed to load your exam. Please contact your administrator.") + ref);
         }
       } catch (e) {
-        if (!cancelled) console.error("Hydration Error:", e);
+        if (!cancelled) {
+          console.error("Hydration Error:", e);
+          setLoadError("A network error prevented your exam from loading. Please check your connection and contact your administrator if this persists.");
+        }
       }
     };
     initializeBank();
@@ -115,6 +135,7 @@ export function useExamSync(candidateId: string, sessionId: string) {
     lastSyncTime,
     recoveredSessionId: internalSessionId,
     deadline,
-    sessionExpired
+    sessionExpired,
+    loadError
   };
 }

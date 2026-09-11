@@ -24,6 +24,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { formatToIST } from "@/lib/time";
 
 type TestCase = { id: string; input: string; output: string };
 type McqOption = { id: string; value: string };
@@ -472,18 +473,43 @@ export default function AdvancedQuestionBank() {
             <LibraryBig className="h-8 w-8 text-accent hidden md:block" />
             Repository Draft Engine
           </h1>
-          <div className="flex items-center gap-2 mt-2">
+          <div className="flex items-center gap-2 mt-2 flex-wrap">
             <p className="text-xs text-muted-foreground mr-2">Target Drive Context:</p>
+            {/* Exam window shown per-option -- two drives with near-identical
+                titles (e.g. two back-to-back time-slot batches) are otherwise
+                impossible to tell apart in this dropdown, which is exactly
+                how the 2026-09-09 SVCE incident happened: 28 questions got
+                committed to the wrong sibling drive by mistake. */}
             <Select value={selectedDriveId} onValueChange={(v: any) => setSelectedDriveId(v)}>
-               <SelectTrigger className="w-[280px] h-9 bg-card/40 border-border/40 text-xs font-semibold">
+               <SelectTrigger className="w-[340px] h-9 bg-card/40 border-border/40 text-xs font-semibold">
                   <SelectValue placeholder="Select Target Drive" />
                </SelectTrigger>
                <SelectContent>
                   {drives.map(d => (
-                    <SelectItem key={d._id} value={d._id}>{d.title}</SelectItem>
+                    <SelectItem key={d._id} value={d._id}>
+                      {d.title}{d.examStart ? ` — ${formatToIST(d.examStart)}` : ""}
+                    </SelectItem>
                   ))}
                </SelectContent>
             </Select>
+            {(() => {
+              const selectedDrive = drives.find(d => d._id === selectedDriveId);
+              if (!selectedDrive) return null;
+              const mcqHave = questions.filter(q => q.type === "MCQ").length;
+              const codingHave = questions.filter(q => q.type === "CODING").length;
+              const mcqNeed = selectedDrive.mcqCount ?? 0;
+              const codingNeed = selectedDrive.codingCount ?? 0;
+              const isReady = mcqHave >= mcqNeed && codingHave >= codingNeed;
+              return (
+                <Badge
+                  variant={isReady ? "secondary" : "destructive"}
+                  className={`text-[10px] font-bold uppercase tracking-wide ${isReady ? "bg-emerald-500/10 text-emerald-500" : ""}`}
+                  title={selectedDrive.examStart ? `Exam window: ${formatToIST(selectedDrive.examStart)} – ${formatToIST(selectedDrive.examEnd)}` : undefined}
+                >
+                  {isReady ? "✓ Ready" : "⚠ Incomplete"} — {mcqHave}/{mcqNeed} MCQ · {codingHave}/{codingNeed} Coding
+                </Badge>
+              );
+            })()}
           </div>
         </div>
 

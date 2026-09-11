@@ -86,6 +86,31 @@ export async function GET(req: Request) {
 
       questionsToDeliver = [...poolMcqs, ...poolCoding];
 
+      // Hard guard against the 2026-09-09 SVCE incident: a drive whose
+      // question bank was never populated (or had its questions uploaded to
+      // a *different* drive by mistake) used to silently get a session
+      // pinned to `question_ids: []`, then `success: true, questions: []`
+      // forever after -- indistinguishable from "still loading" on the
+      // client, with no self-heal and no way for the candidate to recover.
+      // Refuse to create the session at all in that case: better to send a
+      // clear, actionable error than to let every future reload/retry
+      // re-resolve the same permanently-empty pick list. See
+      // PROCTORING_RULEBOOK.md-adjacent incident notes for the full story.
+      if (questionsToDeliver.length === 0) {
+        console.error(
+          `Empty question bank for drive ${drive.id} ("${drive.title}") -- candidate ${candidateId} blocked from starting.`
+        );
+        return NextResponse.json(
+          {
+            error:
+              "This exam's question bank isn't ready yet. Please do not retry -- contact your administrator with this drive name and the current time.",
+            code: "EMPTY_QUESTION_BANK",
+            driveTitle: drive.title,
+          },
+          { status: 503 }
+        );
+      }
+
       // Compute the authoritative deadline once, at creation, rather than
       // leaving the client to (re)derive it from the drive's shared
       // exam_end on every mount -- see src/lib/examTiming.ts.
@@ -94,7 +119,14 @@ export async function GET(req: Request) {
       const driveEndMs = drive.exam_end ? new Date(drive.exam_end).getTime() : Infinity;
       const deadline = new Date(Math.min(startTime.getTime() + durationMs, driveEndMs));
 
-      // Store the specific IDs in the session so they don't change on refresh
+      // Store the specific IDs in the session so they don't change on refresh.
+      // Guarded against a race where two near-simultaneous requests for the
+      // same candidate (StrictMode double-fire, a slow network prompting a
+      // second attempt, two open tabs) both see "no existing session" and
+      // both try to INSERT one: `exam_sessions_one_in_progress_idx` (see
+      // migration 010) makes that a unique-violation instead of two rows,
+      // and the loser here just re-fetches the winner's session rather than
+      // failing outright.
       const { data: newSession, error: createSessionError } = await supabase
         .from("exam_sessions")
         .insert({
@@ -107,8 +139,33 @@ export async function GET(req: Request) {
         })
         .select()
         .single();
-      if (createSessionError) throw createSessionError;
-      session = newSession;
+
+      if (createSessionError) {
+        if (createSessionError.code === "23505") {
+          const { data: winnerSession, error: refetchError } = await supabase
+            .from("exam_sessions")
+            .select("*")
+            .eq("candidate_id", candidateId)
+            .eq("status", "IN_PROGRESS")
+            .maybeSingle();
+          if (refetchError) throw refetchError;
+          if (!winnerSession) throw createSessionError;
+          session = winnerSession;
+          // The winning request locked in its own (independently sampled)
+          // question_ids -- resolve *those*, not this request's discarded
+          // poolMcqs/poolCoding, so both concurrent callers converge on one
+          // consistent question set.
+          const winnerIds: string[] = winnerSession.question_ids || [];
+          const { data: winnerQuestions, error: winnerQErr } = await supabase
+            .from("questions").select("*").in("id", winnerIds);
+          if (winnerQErr) throw winnerQErr;
+          questionsToDeliver = winnerQuestions || [];
+        } else {
+          throw createSessionError;
+        }
+      } else {
+        session = newSession;
+      }
     } else {
       // Self-heal: legacy sessions created before the `deadline` column
       // existed won't have one yet -- compute and persist it now so the
@@ -165,6 +222,29 @@ export async function GET(req: Request) {
           .eq("id", session.id);
         if (updateError) throw updateError;
       }
+    }
+
+    // Same guard as the fresh-session path above, covering the resume branch:
+    // a session already locked to a `question_ids` list that no longer
+    // resolves to any real rows (deleted questions, or a session created
+    // during the empty-bank window before this fix existed) must not be
+    // handed back as `success: true, questions: []` either -- that is
+    // exactly the permanently-stuck-on-reload symptom from the SVCE
+    // incident, and unlike the fresh-session case there's no "just don't
+    // create it" option since the session already exists.
+    if (questionsToDeliver.length === 0) {
+      console.error(
+        `Session ${session.id} for candidate ${candidateId} resolved to zero questions on resume (drive ${drive.id}, "${drive.title}").`
+      );
+      return NextResponse.json(
+        {
+          error:
+            "Your exam questions could not be loaded. Please do not retry -- contact your administrator with this session ID.",
+          code: "UNRESOLVABLE_SESSION_QUESTIONS",
+          sessionId: session.id,
+        },
+        { status: 503 }
+      );
     }
 
     // 3. Mapping payload for the client (Removing Correct Answers + Hashing Hidden Tests)
