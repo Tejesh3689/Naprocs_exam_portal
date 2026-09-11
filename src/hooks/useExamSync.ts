@@ -14,7 +14,7 @@ export function useExamSync(candidateId: string, sessionId: string) {
   const [deadline, setDeadline] = useState<string | null>(null);
   const [sessionExpired, setSessionExpired] = useState(false);
   // Any hydration failure that ISN'T the "session expired" case -- an empty
-  // question bank (503 EMPTY_QUESTION_BANK / UNRESOLVABLE_SESSION_QUESTIONS),
+  // question bank (503 INSUFFICIENT_QUESTION_BANK / UNRESOLVABLE_SESSION_QUESTIONS),
   // a 500, a 404, a network error. Previously there was no `else` branch here
   // at all: any of these left `questions` at `[]` forever with zero visible
   // error, indistinguishable from "still loading" -- see the 2026-09-09 SVCE
@@ -58,7 +58,7 @@ export function useExamSync(candidateId: string, sessionId: string) {
            setSessionExpired(true);
         } else {
            // Any other failure shape (empty question bank, a 500, a 404 --
-           // see route.ts's EMPTY_QUESTION_BANK / UNRESOLVABLE_SESSION_QUESTIONS
+           // see route.ts's INSUFFICIENT_QUESTION_BANK / UNRESOLVABLE_SESSION_QUESTIONS
            // codes, or any thrown exception's generic 500). Include whatever
            // reference the server gave (session ID, drive title) so a
            // candidate has something concrete to hand support.

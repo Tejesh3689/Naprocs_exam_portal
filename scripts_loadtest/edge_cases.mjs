@@ -108,7 +108,7 @@ async function purgeDrive(driveId) {
 }
 
 // ---------------------------------------------------------------------------
-// TEST 1: Fresh session, drive with ZERO questions -> EMPTY_QUESTION_BANK,
+// TEST 1: Fresh session, drive with ZERO questions -> INSUFFICIENT_QUESTION_BANK,
 // no session row created (the original SVCE incident, exact repro).
 // ---------------------------------------------------------------------------
 async function test1_emptyQuestionBank() {
@@ -119,7 +119,7 @@ async function test1_emptyQuestionBank() {
     const { count } = await supabase.from("exam_sessions").select("id", { count: "exact", head: true }).eq("candidate_id", cand.id);
     record(
       "1. Zero-question drive refuses session, no zombie row",
-      status === 503 && body.code === "EMPTY_QUESTION_BANK" && count === 0,
+      status === 503 && body.code === "INSUFFICIENT_QUESTION_BANK" && count === 0,
       `status=${status} code=${body.code} sessionRowsCreated=${count}`
     );
   } finally {
@@ -129,8 +129,9 @@ async function test1_emptyQuestionBank() {
 
 // ---------------------------------------------------------------------------
 // TEST 2: Fresh session, drive with MCQ but coding_count>0 and ZERO coding
-// questions in the bank -- exposes whether the guard also catches a PARTIAL
-// shortfall (only catches TOTAL zero today).
+// questions in the bank -- previously a KNOWN GAP (silently proceeded with
+// fewer questions than configured); now must be blocked the same as the
+// total-zero case, with the shortfall spelled out in the response.
 // ---------------------------------------------------------------------------
 async function test2_partialShortfall() {
   const drive = await makeDrive({ mcq_count: 5, coding_count: 2 });
@@ -138,15 +139,34 @@ async function test2_partialShortfall() {
   const cand = await makeCandidate(drive.id, "T2");
   try {
     const { status, body } = await getJson(`/api/exam/questions?candidateId=${cand.id}`);
-    const mcqDelivered = (body.questions || []).filter((q) => q.type === "MCQ").length;
-    const codingDelivered = (body.questions || []).filter((q) => q.type === "CODING").length;
-    // Documenting current (gap) behavior, not asserting it's correct: a
-    // partial shortfall (some MCQ present, but 0/2 coding as configured)
-    // still succeeds today rather than erroring -- known, undocumented-until-now gap.
+    const { count } = await supabase.from("exam_sessions").select("id", { count: "exact", head: true }).eq("candidate_id", cand.id);
     record(
-      "2. Partial shortfall (5/5 MCQ, 0/2 Coding) -- KNOWN GAP, not guarded",
-      status === 200 && mcqDelivered === 5 && codingDelivered === 0,
-      `status=${status} mcqDelivered=${mcqDelivered} codingDelivered=${codingDelivered}/2 required -- succeeds silently instead of erroring or flagging the shortfall`
+      "2. Partial shortfall (5/5 MCQ, 0/2 Coding) is now blocked, not silently proceeded",
+      status === 503 && body.code === "INSUFFICIENT_QUESTION_BANK" && body.mcqAvailable === 5 && body.codingAvailable === 0 && body.codingRequired === 2 && count === 0,
+      `status=${status} code=${body.code} mcq=${body.mcqAvailable}/${body.mcqRequired} coding=${body.codingAvailable}/${body.codingRequired} sessionRowsCreated=${count}`
+    );
+  } finally {
+    await purgeDrive(drive.id);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// TEST 2b: A drive that deliberately configures coding_count=0 (no coding
+// round at all for this drive) must NOT be blocked just because its coding
+// pool is empty -- 0 required, 0 available is a legitimate, intentional
+// configuration, not a shortfall.
+// ---------------------------------------------------------------------------
+async function test2b_zeroConfiguredIsNotAShortfall() {
+  const drive = await makeDrive({ mcq_count: 5, coding_count: 0 });
+  await addQuestions(drive.id, { mcqCount: 5, codingCount: 0 });
+  const cand = await makeCandidate(drive.id, "T2b");
+  try {
+    const { status, body } = await getJson(`/api/exam/questions?candidateId=${cand.id}`);
+    const mcqDelivered = (body.questions || []).filter((q) => q.type === "MCQ").length;
+    record(
+      "2b. coding_count=0 (MCQ-only drive by design) is NOT flagged as a shortfall",
+      status === 200 && mcqDelivered === 5,
+      `status=${status} mcqDelivered=${mcqDelivered}, code=${body.code || "none (success)"}`
     );
   } finally {
     await purgeDrive(drive.id);
@@ -524,6 +544,7 @@ async function main() {
   const tests = [
     test1_emptyQuestionBank,
     test2_partialShortfall,
+    test2b_zeroConfiguredIsNotAShortfall,
     test3_resumedSessionDeletedQuestions,
     test4_duplicateSessionRace,
     test5_jitterBounds,

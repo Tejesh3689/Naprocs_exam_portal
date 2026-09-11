@@ -107,8 +107,18 @@ export async function GET(req: Request) {
       // 2.1 Get Global Defaults for Fallback
       const { data: globalSettings } = await supabase.from("settings").select("*").limit(1).maybeSingle();
 
-      const mcqCount = drive.mcq_count || globalSettings?.mcq_count || 15;
-      const codingCount = drive.coding_count || globalSettings?.coding_count || 2;
+      // `??`, not `||`: found by edge-case testing (2026-09-11) that `||`
+      // treats a drive DELIBERATELY configured with mcq_count/coding_count of
+      // 0 (an MCQ-only or coding-only drive -- a legitimate configuration
+      // the admin UI allows) the same as "not set," silently overriding the
+      // admin's explicit 0 with the global-settings/hardcoded fallback. That
+      // then made the shortfall guard below misfire: a coding_count=0 drive
+      // with (correctly) zero coding questions would get coerced to
+      // globalSettings.coding_count (or the hardcoded 2), see its empty
+      // coding pool as a shortfall against THAT, and block every candidate
+      // from an intentionally MCQ-only drive.
+      const mcqCount = drive.mcq_count ?? globalSettings?.mcq_count ?? 15;
+      const codingCount = drive.coding_count ?? globalSettings?.coding_count ?? 2;
 
       // PERFORM RANDOM POOLING (First time session initialization)
       const { data: mcqPool, error: mcqPoolError } = await supabase
@@ -119,6 +129,8 @@ export async function GET(req: Request) {
         .from("questions").select("*").eq("drive_id", drive.id).eq("type", "CODING");
       if (codingPoolAllError) throw codingPoolAllError;
 
+      const mcqPoolSize = (mcqPool || []).length;
+      const codingPoolSize = (codingPoolAll || []).length;
       const poolMcqs = sampleRandom(mcqPool || [], mcqCount);
       const poolCoding = sampleRandom(codingPoolAll || [], codingCount);
 
@@ -132,18 +144,36 @@ export async function GET(req: Request) {
       // client, with no self-heal and no way for the candidate to recover.
       // Refuse to create the session at all in that case: better to send a
       // clear, actionable error than to let every future reload/retry
-      // re-resolve the same permanently-empty pick list. See
-      // PROCTORING_RULEBOOK.md-adjacent incident notes for the full story.
-      if (questionsToDeliver.length === 0) {
+      // re-resolve the same permanently-empty pick list.
+      //
+      // Generalized 2026-09-11 (edge-case testing found the gap): the
+      // original guard only caught a TOTAL-zero bank (`questionsToDeliver
+      // .length === 0`). A drive with, say, its full 25 MCQ but 0/3 Coding
+      // questions sailed through untouched -- every candidate silently sat a
+      // shorter exam than the admin configured, with no error and no
+      // visibility, the same category of unfairness as the original
+      // incident, just partial instead of total. Now checked per-pool
+      // against what the drive actually requires (mcqCount/codingCount), not
+      // just "is the combined total non-zero" -- a drive that deliberately
+      // configures a round's count to 0 (no MCQ section, or no coding
+      // section) is correctly exempt from that pool's check, since 0 < 0 is
+      // false.
+      const mcqShortfall = mcqPoolSize < mcqCount;
+      const codingShortfall = codingPoolSize < codingCount;
+      if (mcqShortfall || codingShortfall) {
         console.error(
-          `Empty question bank for drive ${drive.id} ("${drive.title}") -- candidate ${candidateId} blocked from starting.`
+          `Insufficient question bank for drive ${drive.id} ("${drive.title}"): ${mcqPoolSize}/${mcqCount} MCQ, ${codingPoolSize}/${codingCount} Coding -- candidate ${candidateId} blocked from starting.`
         );
         return NextResponse.json(
           {
             error:
-              "This exam's question bank isn't ready yet. Please do not retry -- contact your administrator with this drive name and the current time.",
-            code: "EMPTY_QUESTION_BANK",
+              `This exam's question bank isn't fully ready yet (${mcqPoolSize}/${mcqCount} MCQ, ${codingPoolSize}/${codingCount} Coding available). Please do not retry -- contact your administrator with this drive name and the current time.`,
+            code: "INSUFFICIENT_QUESTION_BANK",
             driveTitle: drive.title,
+            mcqAvailable: mcqPoolSize,
+            mcqRequired: mcqCount,
+            codingAvailable: codingPoolSize,
+            codingRequired: codingCount,
           },
           { status: 503 }
         );

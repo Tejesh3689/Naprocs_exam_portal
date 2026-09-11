@@ -90,7 +90,7 @@ const questionsReport = await fireAllConcurrently(state.candidates, async (c) =>
 printPhaseReport("Questions fetch", questionsReport);
 
 // Flag specifically the failure modes this whole exercise exists to catch.
-const emptyBankHits = questionsReport.results.filter((r) => r.body?.code === "EMPTY_QUESTION_BANK" || r.body?.code === "UNRESOLVABLE_SESSION_QUESTIONS");
+const emptyBankHits = questionsReport.results.filter((r) => r.body?.code === "INSUFFICIENT_QUESTION_BANK" || r.body?.code === "UNRESOLVABLE_SESSION_QUESTIONS");
 if (emptyBankHits.length > 0) {
   console.error(`\n!!! ${emptyBankHits.length} candidates hit the empty-question-bank guard -- this should never happen against a freshly-seeded drive. Investigate before proceeding.`);
 }
