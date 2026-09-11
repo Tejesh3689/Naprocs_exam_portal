@@ -44,7 +44,11 @@ export async function POST(req: Request) {
         const tc = testCases[i];
         const start = Date.now();
         try {
-          const { stdout, stderr, exitCode } = await executeViaPiston(language, studentCode, (tc.input || "").toString());
+          // Explicit 'normal' priority: this is the candidate's own optional
+          // "Run Tests" pre-check, not the authoritative score -- it must
+          // never queue ahead of examTiming.ts's 'high'-priority re-grading
+          // at final submit. See pistonExecute.ts's two-tier queue.
+          const { stdout, stderr, exitCode } = await executeViaPiston(language, studentCode, (tc.input || "").toString(), undefined, "normal");
           const actual = stdout.trim();
           const error = exitCode !== 0 ? (stderr || "Execution failed").slice(0, 500) : null;
           const passed = !error && robustNormalizeOutput(actual) === robustNormalizeOutput(tc.expectedOutput);

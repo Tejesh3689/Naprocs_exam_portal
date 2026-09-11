@@ -169,7 +169,12 @@ export async function finalizeSession(params: {
         let hadInfraFailure = false;
         for (const tc of testCases) {
           try {
-            const { stdout, exitCode } = await executeViaPiston(language, studentCode, (tc.input || "").toString());
+            // 'high' priority: this IS the authoritative score, computed at
+            // the one moment every candidate's Piston calls converge (a
+            // synchronized final submit) -- must never queue behind other
+            // candidates' optional "Run Tests" pre-checks. See
+            // pistonExecute.ts's two-tier queue.
+            const { stdout, exitCode } = await executeViaPiston(language, studentCode, (tc.input || "").toString(), undefined, "high");
             const actual = stdout.trim();
             if (exitCode === 0 && robustNormalizeOutput(actual) === robustNormalizeOutput(tc.expectedOutput)) {
               passedCount++;

@@ -49,18 +49,18 @@ const SOLUTIONS = {
   c: "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\nint main(void) {\n  char buf[1024];\n  if (!fgets(buf, sizeof(buf), stdin)) return 0;\n  long sum = 0;\n  char *tok = strtok(buf, \",\");\n  while (tok) { sum += atol(tok); tok = strtok(NULL, \",\"); }\n  printf(\"%ld\\n\", sum);\n  return 0;\n}\n",
   cpp: "#include <iostream>\n#include <sstream>\n#include <string>\nusing namespace std;\nint main() {\n  string line;\n  getline(cin, line);\n  stringstream ss(line);\n  string tok;\n  long sum = 0;\n  while (getline(ss, tok, ',')) sum += stol(tok);\n  cout << sum << endl;\n  return 0;\n}\n",
 };
-// CAPPED to javascript/python for now: a 20-candidate dry run found the
-// self-hosted Piston container fails outright under even trivial concurrency
-// for java (0/12 test cases passed -- reproduced standalone: 4 concurrent
-// Java executions all return a non-zero exit with EMPTY stderr, the
-// signature of the process being killed, most likely OOM given Java's heavy
-// per-execution memory/startup footprint on a single-container Piston setup)
-// and degrades for cpp (4/12 passed). javascript (in-process vm, no Piston)
-// and python (light interpreter, fast startup) were unaffected even at that
-// scale. Re-widen this back to all of SOLUTIONS's keys once Piston capacity
-// is fixed (more memory/CPU, per-language containers, or a concurrency-capped
-// queue in front of it) and re-verified with another dry run first.
-const LANGUAGES = ["javascript", "python"];
+// Re-widened to all languages (2026-09-11) after fixing Piston: the droplet
+// now runs with PISTON_MAX_CONCURRENT_JOBS=3 + a 128MB per-job memory limit
+// (was unlimited-memory/64-concurrent defaults, which is why this used to
+// OOM-kill under trivial load), and pistonExecute.ts added a matching
+// in-process concurrency gate + realistic timeout so genuinely-queued (not
+// actually-failed) executions don't get killed by our own client first.
+// Confirmed via direct testing: 6 concurrent Java submissions now all score
+// 100% correctly (just slower -- ~40-60s instead of instant). Expect
+// meaningfully higher latency at real scale on this still-small ($6/mo,
+// 1vCPU/1GB) droplet -- that's an accepted, honest tradeoff (slow-but-correct
+// or a clear "busy, try again") over the old silent-wrong-score failure mode.
+const LANGUAGES = Object.keys(SOLUTIONS);
 
 const t0 = Date.now();
 const timeline = [];

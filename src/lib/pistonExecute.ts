@@ -7,6 +7,8 @@
 // `POST /api/v2/packages`). Requires a Docker-capable host in production
 // (Railway/Render/self-host; NOT serverless-only platforms like Netlify).
 
+import crypto from "crypto";
+
 const PISTON_API_URL = process.env.PISTON_API_URL || "http://localhost:2000";
 
 // The self-hosted Piston droplet (naprocs-piston-server, DigitalOcean
@@ -39,30 +41,39 @@ const PISTON_API_URL = process.env.PISTON_API_URL || "http://localhost:2000";
 const MAX_CONCURRENT_PISTON_CALLS = 3;
 const MAX_QUEUE_WAIT_MS = 25_000;
 let activePistonCalls = 0;
-const pistonWaitQueue: Array<() => void> = [];
+
+// Two-tier queue, not one FIFO list: a candidate's optional "Run Tests"
+// click and the server's OWN authoritative re-grading during final submit
+// (examTiming.ts) used to compete for slots as equals. The one that actually
+// determines a score should never be stuck behind exploratory pre-checks
+// during a synchronized-submission burst -- so `high` (final-grading calls)
+// is always drained before `normal` (interactive evaluate calls).
+export type PistonPriority = "high" | "normal";
+const pistonWaitQueues: Record<PistonPriority, Array<() => void>> = { high: [], normal: [] };
 
 function releaseNextInQueue() {
   activePistonCalls--;
-  const next = pistonWaitQueue.shift();
+  const next = pistonWaitQueues.high.shift() || pistonWaitQueues.normal.shift();
   if (next) next();
 }
 
 // Acquires a concurrency slot, or throws a clear, honest "busy" error if one
 // doesn't free up within MAX_QUEUE_WAIT_MS. Always resolves with a release
 // function -- callers MUST call it (in a `finally`) once done.
-async function acquirePistonSlot(): Promise<() => void> {
+async function acquirePistonSlot(priority: PistonPriority): Promise<() => void> {
   if (activePistonCalls < MAX_CONCURRENT_PISTON_CALLS) {
     activePistonCalls++;
     return () => releaseNextInQueue();
   }
 
   return new Promise((resolve, reject) => {
+    const queue = pistonWaitQueues[priority];
     let settled = false;
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      const idx = pistonWaitQueue.indexOf(onTurn);
-      if (idx !== -1) pistonWaitQueue.splice(idx, 1);
+      const idx = queue.indexOf(onTurn);
+      if (idx !== -1) queue.splice(idx, 1);
       reject(new Error("The code execution service is currently very busy handling other submissions. Please wait a moment and try again."));
     }, MAX_QUEUE_WAIT_MS);
 
@@ -74,7 +85,7 @@ async function acquirePistonSlot(): Promise<() => void> {
       resolve(() => releaseNextInQueue());
     }
 
-    pistonWaitQueue.push(onTurn);
+    queue.push(onTurn);
   });
 }
 
@@ -98,7 +109,7 @@ export interface PistonResult {
   exitCode: number;
 }
 
-async function executeOnce(language: string, code: string, stdin: string, timeoutMs: number): Promise<PistonResult> {
+async function executeOnce(language: string, code: string, stdin: string, timeoutMs: number, priority: PistonPriority): Promise<PistonResult> {
   const config = LANGUAGE_CONFIG[language];
   if (!config) throw new Error(`Unsupported Piston language: ${language}`);
 
@@ -107,7 +118,7 @@ async function executeOnce(language: string, code: string, stdin: string, timeou
   // landing in Piston's own internal queue simultaneously, each one
   // independently racing (and losing to) the abort timer while genuinely
   // still waiting its turn, not actually failing.
-  const releaseSlot = await acquirePistonSlot();
+  const releaseSlot = await acquirePistonSlot(priority);
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -174,6 +185,35 @@ function looksSuspiciouslyEmpty(result: PistonResult): boolean {
   return result.exitCode === 0 && result.stdout.trim() === "" && result.stderr.trim() === "";
 }
 
+// Content-addressed result cache: (language, code, stdin) deterministically
+// produces the same (stdout, stderr, exitCode) for well-behaved programs (no
+// wall-clock/random-without-seed dependence -- a safe assumption for the
+// simple stdin->stdout exam questions this judges). A candidate very
+// commonly hits Piston twice for the SAME unchanged code: once via their own
+// "Run Tests" click, then again when examTiming.ts re-grades authoritatively
+// at final submit -- exactly the highest-contention moment (a synchronized
+// submission burst). A cache hit skips the concurrency queue and the network
+// call entirely. Also naturally dedupes identical submissions across
+// DIFFERENT candidates (e.g. everyone's unchanged starter-code boilerplate).
+// Deliberately NOT keyed by candidate/session -- purely by content, so this
+// needs no plumbing through either call site.
+const MAX_CACHE_ENTRIES = 2000;
+const resultCache = new Map<string, PistonResult>();
+
+function cacheKeyFor(language: string, code: string, stdin: string): string {
+  return crypto.createHash("sha256").update(language).update("\0").update(code).update("\0").update(stdin).digest("hex");
+}
+
+function rememberResult(key: string, result: PistonResult) {
+  if (resultCache.size >= MAX_CACHE_ENTRIES) {
+    // Map preserves insertion order -- .keys().next().value is the oldest
+    // entry, giving a simple FIFO eviction with no extra bookkeeping.
+    const oldest = resultCache.keys().next().value;
+    if (oldest !== undefined) resultCache.delete(oldest);
+  }
+  resultCache.set(key, result);
+}
+
 // Full-program, stdin -> stdout execution (the code receives `stdin` as
 // standard input and must print its answer to standard output) -- the
 // standard convention for multi-language judges, and the only one that's
@@ -184,13 +224,35 @@ function looksSuspiciouslyEmpty(result: PistonResult): boolean {
 // (MAX_QUEUE_WAIT_MS above), so this just needs to comfortably cover
 // PISTON_COMPILE_TIMEOUT (10s) + PISTON_RUN_TIMEOUT (8s) worst case without
 // the two clocks fighting each other.
-export async function executeViaPiston(language: string, code: string, stdin: string, timeoutMs = 20_000): Promise<PistonResult> {
+//
+// `priority`: 'high' for the server's own authoritative re-grading
+// (examTiming.ts, at final submit) so it can never get stuck in queue behind
+// a candidate's optional "Run Tests" pre-check (`normal`, the default) during
+// a synchronized-submission burst -- see the two-tier queue above.
+export async function executeViaPiston(
+  language: string,
+  code: string,
+  stdin: string,
+  timeoutMs = 20_000,
+  priority: PistonPriority = "normal"
+): Promise<PistonResult> {
+  const key = cacheKeyFor(language, code, stdin);
+  const cached = resultCache.get(key);
+  if (cached) return cached;
+
   let lastResult: PistonResult | null = null;
   for (let attempt = 0; attempt <= 2; attempt++) {
-    const result = await executeOnce(language, code, stdin, timeoutMs);
-    if (!looksSuspiciouslyEmpty(result)) return result;
+    const result = await executeOnce(language, code, stdin, timeoutMs, priority);
+    if (!looksSuspiciouslyEmpty(result)) {
+      rememberResult(key, result);
+      return result;
+    }
     lastResult = result;
     await new Promise((resolve) => setTimeout(resolve, 150 + Math.random() * 150));
   }
+  // The "suspiciously empty" case survives all retries -- a transient infra
+  // symptom, not a deterministic function of the code, so deliberately NOT
+  // cached: a later call for this same code should get a fresh attempt
+  // rather than being stuck replaying the same glitch forever.
   return lastResult!;
 }

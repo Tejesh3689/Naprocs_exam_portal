@@ -117,7 +117,20 @@ export async function GET(req: Request) {
       const startTime = new Date();
       const durationMs = (drive.exam_duration || 0) * 60_000;
       const driveEndMs = drive.exam_end ? new Date(drive.exam_end).getTime() : Infinity;
-      const deadline = new Date(Math.min(startTime.getTime() + durationMs, driveEndMs));
+      // Deadline jitter: shave 0-15s off (never add) each candidate's own
+      // deadline, chosen once here and then fixed for the life of the
+      // session. Without this, a cohort that all started together times out
+      // at the EXACT same instant -- their client-side auto-submit
+      // (dashboard.tsx's timeLeft===0 effect) and the resulting Piston
+      // re-grading burst all land in the same millisecond, which is exactly
+      // the synchronized-end scenario that saturates the self-hosted Piston
+      // droplet's still-limited concurrency (see pistonExecute.ts). Spreading
+      // a few hundred candidates' actual time-up moments across a 15s window
+      // costs each of them a negligible, undetectable sliver of their exam
+      // duration, in exchange for a meaningfully smaller peak burst.
+      const JITTER_MAX_MS = 15_000;
+      const jitterMs = Math.floor(Math.random() * JITTER_MAX_MS);
+      const deadline = new Date(Math.min(startTime.getTime() + durationMs, driveEndMs) - jitterMs);
 
       // Store the specific IDs in the session so they don't change on refresh.
       // Guarded against a race where two near-simultaneous requests for the
