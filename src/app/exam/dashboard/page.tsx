@@ -1050,9 +1050,19 @@ export default function ExamDashboard() {
                       if (tc.isHidden && !result) return null;
 
                       const isCorrect = result?.passed;
-                      
+                      // Distinguish "the judge was momentarily overloaded"
+                      // (pistonExecute.ts's queue-wait rejection, or the
+                      // "Execution timed out." string it also returns) from
+                      // an actual bug in the student's own code. Rendering
+                      // both as "Runtime Error" told a candidate whose code
+                      // was genuinely correct that something was wrong with
+                      // it, when the honest answer was "the server was busy,
+                      // try again" -- a real source of exam-time anxiety over
+                      // nothing the candidate did wrong.
+                      const isBusyError = typeof result?.error === "string" && (result.error.includes("currently very busy") || result.error.includes("Execution timed out"));
+
                       return (
-                        <div key={originalIdx} className={`p-4 rounded-xl border transition-all ${result ? (isCorrect ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-destructive/30 bg-destructive/5') : 'border-border/30 bg-card/40'}`}>
+                        <div key={originalIdx} className={`p-4 rounded-xl border transition-all ${result ? (isCorrect ? 'border-emerald-500/30 bg-emerald-500/5' : isBusyError ? 'border-amber-500/30 bg-amber-500/5' : 'border-destructive/30 bg-destructive/5') : 'border-border/30 bg-card/40'}`}>
                            <div className="flex justify-between items-center mb-3">
                               <div className="flex items-center gap-2">
                                 <span className="text-[10px] font-bold text-muted-foreground/60 uppercase">
@@ -1063,8 +1073,8 @@ export default function ExamDashboard() {
                               {result && (
                                 <div className="flex items-center gap-2">
                                   <span className="text-[9px] font-mono text-muted-foreground/50">{result.runtime}ms</span>
-                                  <span className={`text-[9px] font-bold uppercase tracking-tighter px-2 py-0.5 rounded-full ${isCorrect ? 'bg-emerald-500/20 text-emerald-500' : 'bg-destructive/20 text-destructive'}`}>
-                                     {isCorrect ? 'Accepted' : result.error ? 'Runtime Error' : 'Wrong Answer'}
+                                  <span className={`text-[9px] font-bold uppercase tracking-tighter px-2 py-0.5 rounded-full ${isCorrect ? 'bg-emerald-500/20 text-emerald-500' : isBusyError ? 'bg-amber-500/20 text-amber-500' : 'bg-destructive/20 text-destructive'}`}>
+                                     {isCorrect ? 'Accepted' : isBusyError ? 'Judge Busy — Retry' : result.error ? 'Runtime Error' : 'Wrong Answer'}
                                   </span>
                                 </div>
                               )}
@@ -1084,9 +1094,11 @@ export default function ExamDashboard() {
                               </div>
                               {result && (
                                  <div className="flex flex-col gap-1 pt-2">
-                                    <span className={`text-[9px] font-bold uppercase tracking-widest opacity-60 ${isCorrect ? 'text-emerald-500' : 'text-destructive'}`}>Your Output</span>
-                                    <pre className={`text-[11px] font-mono p-2 rounded-md border overflow-hidden truncate ${isCorrect ? 'bg-emerald-500/5 border-emerald-500/10 text-emerald-500' : 'bg-destructive/5 border-destructive/10 text-destructive'}`}>
-                                       {result.error || String(result.actual)}
+                                    <span className={`text-[9px] font-bold uppercase tracking-widest opacity-60 ${isCorrect ? 'text-emerald-500' : isBusyError ? 'text-amber-500' : 'text-destructive'}`}>
+                                       {isBusyError ? "Server Note" : "Your Output"}
+                                    </span>
+                                    <pre className={`text-[11px] font-mono p-2 rounded-md border overflow-hidden truncate ${isCorrect ? 'bg-emerald-500/5 border-emerald-500/10 text-emerald-500' : isBusyError ? 'bg-amber-500/5 border-amber-500/10 text-amber-500' : 'bg-destructive/5 border-destructive/10 text-destructive'}`}>
+                                       {isBusyError ? "This wasn't your code's fault -- the judge was busy. Click \"Run Test Suite\" again in a moment." : (result.error || String(result.actual))}
                                     </pre>
                                  </div>
                               )}

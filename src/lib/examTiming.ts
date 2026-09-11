@@ -158,11 +158,26 @@ export async function finalizeSession(params: {
         totalScore += 10;
       }
     } else if (q.type === "CODING") {
-      const studentCode = userRes?.codeStr || q.boilerplate_code || "";
+      const rawCode: string | undefined = userRes?.codeStr;
+      const studentCode = rawCode || q.boilerplate_code || "";
       const testCases = q.test_cases || [];
       const language = userRes?.language;
 
       if (testCases.length === 0) continue;
+
+      // A candidate who never actually wrote/submitted their own code for
+      // this question (rawCode empty/absent -- e.g. selected a language but
+      // ran out of time before typing anything) can never legitimately pass
+      // any test case. Skip Piston entirely rather than falling back to
+      // running the JS boilerplate stub as if it were their answer -- for a
+      // Piston language that isn't even valid source in that language, and
+      // either way the outcome (0 passed) isn't in question. Pure load
+      // reduction: one less wasted execution per untouched submission,
+      // exactly the "make less load for Piston" ask.
+      if (isPistonLanguage(language) && !rawCode?.trim()) {
+        finalResponses[q.id] = { ...userRes, testsPassed: 0, totalTests: testCases.length };
+        continue;
+      }
 
       if (isPistonLanguage(language)) {
         let passedCount = 0;
