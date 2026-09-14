@@ -1,12 +1,14 @@
 import { NextResponse } from "next/server";
 import supabase from "@/lib/supabase";
 import crypto from "crypto";
+import { parseJsonBody } from "@/lib/parseJsonBody";
 
 const VALID_EVENT_TYPES = ["SNAPSHOT", "NO_FACE", "MULTIPLE_FACES", "LOOKING_AWAY", "HIGH_NOISE"];
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json();
+    const body = await parseJsonBody(req);
+    if (body instanceof NextResponse) return body;
     const { sessionId, candidateId, eventType, snapshotBase64 } = body;
 
     if (!sessionId || !candidateId || !eventType || !snapshotBase64) {

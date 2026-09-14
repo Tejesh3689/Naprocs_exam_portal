@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import vm from "node:vm";
 import supabase from "@/lib/supabase";
 import { isPistonLanguage, executeViaPiston } from "@/lib/pistonExecute";
+import { parseJsonBody } from "@/lib/parseJsonBody";
 
 // Robust Normalizer: Standardizes formatting for comparison (shared by both
 // the JS vm path below and the multi-language Piston path).
@@ -16,7 +17,9 @@ const robustNormalizeOutput = (s: string) => (s || "")
 
 export async function POST(req: Request) {
   try {
-    const { studentCode, questionId, language } = await req.json();
+    const body = await parseJsonBody(req);
+    if (body instanceof NextResponse) return body;
+    const { studentCode, questionId, language } = body;
 
     if (!studentCode || !questionId) {
       return NextResponse.json({ error: "No execution payload or identity provided" }, { status: 400 });

@@ -3,10 +3,13 @@ import supabase from "@/lib/supabase";
 import crypto from "crypto";
 import { formatToIST } from "@/lib/time";
 import { sweepIfExpired } from "@/lib/examTiming";
+import { parseJsonBody } from "@/lib/parseJsonBody";
+import { isRateLimited, getClientIp } from "@/lib/rateLimit";
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json();
+    const body = await parseJsonBody(req);
+    if (body instanceof NextResponse) return body;
     // Accepts either the candidate's email or their college_roll_number in
     // one field -- auto-detected by "@", mirroring loginIdentifierSchema in
     // src/lib/validators.ts. `email` is still accepted for any older client
@@ -25,6 +28,25 @@ export async function POST(req: Request) {
     // email, uppercase roll number) and the backfill in
     // supabase/migrations/008_normalize_candidate_identifiers.sql.
     const lookupValue = isEmailIdentifier ? rawIdentifier.toLowerCase() : rawIdentifier.toUpperCase();
+
+    // Brute-force guard (external security review, 2026-09-14): the 6-digit
+    // PIN has only 10^6 combinations and was completely unthrottled. Two
+    // independent, generous limits -- keyed on the specific identifier being
+    // targeted (catches "guess every PIN for this one candidate") and on the
+    // client IP (catches "guess across many candidates from one source",
+    // while staying loose enough for a shared campus/lab network with many
+    // legitimate candidates behind one IP). Either limit tripping returns 429
+    // before any database lookup runs. See src/lib/rateLimit.ts for why this
+    // fails open rather than ever risking a false lockout.
+    if (
+      isRateLimited(`exam-login:id:${lookupValue}`, 10, 10 * 60_000) ||
+      isRateLimited(`exam-login:ip:${getClientIp(req)}`, 30, 10 * 60_000)
+    ) {
+      return NextResponse.json(
+        { error: "Too many login attempts. Please wait a few minutes and try again." },
+        { status: 429 }
+      );
+    }
 
     // 1. Find Candidate First to get their Drive Association
     const { data: candidate, error: candidateError } = await supabase

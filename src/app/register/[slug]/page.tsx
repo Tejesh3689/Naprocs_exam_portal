@@ -118,8 +118,6 @@ export default function RegisterPage() {
 
       if (res.ok) {
         setSuccessPin(data.accessPin);
-        // Store for convenience
-        localStorage.setItem("examEmail", reviewData.email);
       } else {
         setReviewError(data.error || "Registration failed");
       }
@@ -488,13 +486,19 @@ export default function RegisterPage() {
               <CardContent className="pb-8">
                 <div className="bg-input/40 border border-border/50 rounded-2xl p-6 mt-4 backdrop-blur-sm">
                   <p className="text-xs uppercase tracking-widest text-muted-foreground font-semibold mb-3">Your Access PIN</p>
-                  <div className="flex items-center justify-center space-x-4">
+                  <div className="flex items-center justify-center space-x-4 flex-wrap">
                     <Tooltip>
-                      <TooltipTrigger 
+                      <TooltipTrigger
                         onClick={copyPin}
-                        className="group flex flex-row items-center gap-3 active:scale-95 transition-all outline-none cursor-pointer"
+                        className="group flex flex-row items-center gap-3 flex-wrap justify-center min-w-0 active:scale-95 transition-all outline-none cursor-pointer"
                       >
-                        <div className="tracking-[0.5em] text-5xl font-mono font-medium text-foreground mix-blend-plus-lighter shadow-sm">
+                        {/* Fixed text-5xl + tracking-[0.5em] measured at ~367px for 6 mono digits +
+                            copy icon -- exceeds the ~260-320px available inside this card on common
+                            mobile widths (390px iPhones, 360px budget Android, 320px SE-class), and the
+                            Card's overflow-hidden clips it rather than scrolling. Scaling down + wrapping
+                            below sm: keeps the PIN fully visible (not just copyable) on every device
+                            class candidates actually register from. */}
+                        <div className="text-3xl sm:text-5xl tracking-[0.3em] sm:tracking-[0.5em] font-mono font-medium text-foreground mix-blend-plus-lighter shadow-sm">
                           {successPin}
                         </div>
                         <div className={`p-2 rounded-full transition-colors ${hasCopied ? 'bg-emerald-500/20 text-emerald-500 border border-emerald-500/30' : 'bg-primary/10 text-primary border border-primary/20 group-hover:bg-primary/20'}`}>

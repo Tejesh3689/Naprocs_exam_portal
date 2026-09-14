@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
 import supabase from "@/lib/supabase";
 import { sweepIfExpired } from "@/lib/examTiming";
+import { parseJsonBody } from "@/lib/parseJsonBody";
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json();
+    const body = await parseJsonBody(req);
+    if (body instanceof NextResponse) return body;
     const { sessionId, candidateId, incomingResponses, cheatWarnings } = body;
 
     if (!sessionId || !candidateId || !incomingResponses) {

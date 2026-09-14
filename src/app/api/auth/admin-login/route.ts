@@ -1,9 +1,27 @@
 import { NextResponse } from "next/server";
 import { SignJWT } from "jose";
+import { parseJsonBody } from "@/lib/parseJsonBody";
+import { isRateLimited, getClientIp } from "@/lib/rateLimit";
 
 export async function POST(req: Request) {
   try {
-    const { passphrase } = await req.json();
+    const body = await parseJsonBody(req);
+    if (body instanceof NextResponse) return body;
+    const { passphrase } = body;
+
+    // Brute-force guard (external security review, 2026-09-14): one shared
+    // passphrase, no usernames, previously zero throttling -- gates the
+    // entire admin surface (candidate PII, resumes, results). IP-only (no
+    // per-admin identity to key on until V-04's multi-account work happens).
+    // Tighter than exam-login's threshold since far fewer legitimate people
+    // ever hit this endpoint. See src/lib/rateLimit.ts for the fail-open
+    // guarantee.
+    if (isRateLimited(`admin-login:ip:${getClientIp(req)}`, 10, 10 * 60_000)) {
+      return NextResponse.json(
+        { error: "Too many login attempts. Please wait a few minutes and try again." },
+        { status: 429 }
+      );
+    }
 
     const secretPassphrase = process.env.ADMIN_SECRET_PASSPHRASE;
 
