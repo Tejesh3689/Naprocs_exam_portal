@@ -243,16 +243,29 @@ export async function executeViaPiston(
   let lastResult: PistonResult | null = null;
   for (let attempt = 0; attempt <= 2; attempt++) {
     const result = await executeOnce(language, code, stdin, timeoutMs, priority);
-    if (!looksSuspiciouslyEmpty(result)) {
+    // exitCode 124 is executeOnce's own sentinel for "the request was
+    // aborted by OUR per-call timeout" (AbortController firing) -- a
+    // transient infra symptom under contention, not a deterministic function
+    // of the code, exactly like "suspiciously empty" below. Found by a full
+    // 388-candidate/776-coding-submission rehearsal (2026-09-14): under
+    // heavy load this returns NORMALLY (not thrown), so it used to sail past
+    // the cache-eligibility check and get remembered as if it were the
+    // code's real output -- meaning one bad timeout during a candidate's own
+    // "Run Tests" click would replay as a permanent wrong answer at final
+    // submit too, even minutes later once Piston had fully recovered, with
+    // no self-heal. (Genuinely busy-queue rejections are a separate, already
+    // safe path -- acquirePistonSlot's timeout THROWS, which skips this
+    // caching logic entirely rather than reaching here.)
+    const isTransientInfraSymptom = looksSuspiciouslyEmpty(result) || result.exitCode === 124;
+    if (!isTransientInfraSymptom) {
       rememberResult(key, result);
       return result;
     }
     lastResult = result;
     await new Promise((resolve) => setTimeout(resolve, 150 + Math.random() * 150));
   }
-  // The "suspiciously empty" case survives all retries -- a transient infra
-  // symptom, not a deterministic function of the code, so deliberately NOT
-  // cached: a later call for this same code should get a fresh attempt
-  // rather than being stuck replaying the same glitch forever.
+  // Every retry hit a transient infra symptom -- deliberately NOT cached: a
+  // later call for this same code should get a fresh attempt rather than
+  // being stuck replaying the same glitch forever.
   return lastResult!;
 }

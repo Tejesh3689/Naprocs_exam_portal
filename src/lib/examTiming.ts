@@ -190,9 +190,18 @@ export async function finalizeSession(params: {
             // candidates' optional "Run Tests" pre-checks. See
             // pistonExecute.ts's two-tier queue.
             const { stdout, exitCode } = await executeViaPiston(language, studentCode, (tc.input || "").toString(), undefined, "high");
-            const actual = stdout.trim();
-            if (exitCode === 0 && robustNormalizeOutput(actual) === robustNormalizeOutput(tc.expectedOutput)) {
-              passedCount++;
+            // exitCode 124 is pistonExecute.ts's own sentinel for "our
+            // per-call timeout fired" -- executeViaPiston already retries
+            // this internally a couple of times, but if it STILL comes back
+            // this way after those retries, that's infra contention, not a
+            // wrong-answer verdict, exactly like a thrown error below.
+            if (exitCode === 124) {
+              hadInfraFailure = true;
+            } else {
+              const actual = stdout.trim();
+              if (exitCode === 0 && robustNormalizeOutput(actual) === robustNormalizeOutput(tc.expectedOutput)) {
+                passedCount++;
+              }
             }
           } catch (e: any) {
             console.error(`Piston Scoring Failure for Q ${q.id}:`, e.message);
