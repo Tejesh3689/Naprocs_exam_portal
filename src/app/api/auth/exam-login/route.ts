@@ -31,16 +31,26 @@ export async function POST(req: Request) {
 
     // Brute-force guard (external security review, 2026-09-14): the 6-digit
     // PIN has only 10^6 combinations and was completely unthrottled. Two
-    // independent, generous limits -- keyed on the specific identifier being
-    // targeted (catches "guess every PIN for this one candidate") and on the
-    // client IP (catches "guess across many candidates from one source",
-    // while staying loose enough for a shared campus/lab network with many
-    // legitimate candidates behind one IP). Either limit tripping returns 429
-    // before any database lookup runs. See src/lib/rateLimit.ts for why this
-    // fails open rather than ever risking a false lockout.
+    // independent limits -- keyed on the specific identifier being targeted
+    // (catches "guess every PIN for this one candidate": the real threat,
+    // and a low threshold here is exactly what stops it -- 10 guesses/10min
+    // makes exhausting 10^6 combinations take ~139 days) and on the client
+    // IP (catches "guess across many DIFFERENT candidates from one source").
+    //
+    // The IP threshold was found, via a full-scale rehearsal (2026-09-14,
+    // 388 simulated candidates against production ahead of the real
+    // nap_klu_2026 exam), to be dangerously miscalibrated at 30/10min: 373 of
+    // 388 got locked out immediately, because an entire exam hall/campus
+    // network's candidates very plausibly share one NAT'd public IP -- a
+    // realistic scenario this threshold treated as an attack. Raised to
+    // 2000/10min: still low enough to eventually catch a genuinely
+    // runaway automated flood, but high enough that no real exam cohort
+    // sharing a network should ever hit it. The per-identifier limit above
+    // is what actually stops PIN brute-forcing; this IP limit is a loose
+    // backstop, not the primary defense, and must never be the tighter one.
     if (
       isRateLimited(`exam-login:id:${lookupValue}`, 10, 10 * 60_000) ||
-      isRateLimited(`exam-login:ip:${getClientIp(req)}`, 30, 10 * 60_000)
+      isRateLimited(`exam-login:ip:${getClientIp(req)}`, 2000, 10 * 60_000)
     ) {
       return NextResponse.json(
         { error: "Too many login attempts. Please wait a few minutes and try again." },
