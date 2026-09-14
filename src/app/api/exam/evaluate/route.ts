@@ -6,11 +6,24 @@ import { parseJsonBody } from "@/lib/parseJsonBody";
 
 // Robust Normalizer: Standardizes formatting for comparison (shared by both
 // the JS vm path below and the multi-language Piston path).
+//
+// `.replace(/\s+/g, '')` per line, not just `.trim()`: found live the night
+// before the nap_klu_2026 exam -- a correct Python solution to an
+// array-returning question printed `[1, 4]` (Python's default list repr,
+// comma-space) while the expected output was authored as `[1,4]` (no
+// space). Plain per-line trim only strips LEADING/TRAILING whitespace, so
+// that internal-space difference was a hard mismatch -- a semantically
+// correct answer graded as wrong purely due to language-idiomatic output
+// formatting, through no fault of the candidate. Stripping ALL whitespace
+// within each line (not across lines -- newlines still separate distinct
+// output lines) makes comma/bracket spacing irrelevant everywhere, which is
+// safe -- no genuine test case in this app relies on internal spacing to
+// distinguish two different valid answers.
 const robustNormalizeOutput = (s: string) => (s || "")
   .toString()
   .replace(/\r\n/g, '\n')
   .split('\n')
-  .map(l => l.trim())
+  .map(l => l.trim().replace(/\s+/g, ''))
   .filter(l => l !== "")
   .join('\n')
   .toLowerCase();
@@ -78,12 +91,15 @@ export async function POST(req: Request) {
         const cases = ${JSON.stringify(testCases)};
         const entry = "${entryPoint}";
 
-        // Robust Normalizer: Standardizes formatting for comparison
+        // Robust Normalizer: Standardizes formatting for comparison. Strips
+        // ALL whitespace per line (not just leading/trailing) -- see the
+        // top-of-file comment on the outer robustNormalizeOutput for why
+        // (a correct Python list-repr like "[1, 4]" must match "[1,4]").
         const robustNormalize = (s) => (s || "")
           .toString()
           .replace(/\\r\\n/g, '\\n')
           .split('\\n')
-          .map(l => l.trim())
+          .map(l => l.trim().replace(/\\s+/g, ''))
           .filter(l => l !== "")
           .join('\\n')
           .toLowerCase();
@@ -192,12 +208,14 @@ export async function POST(req: Request) {
         });
       }
 
-      // 3. Comparison with Robust Normalization
+      // 3. Comparison with Robust Normalization -- strips ALL whitespace per
+      // line, not just leading/trailing (see the top-of-file comment on
+      // robustNormalizeOutput for why).
       const robustNormalize = (s: string) => (s || "")
         .toString()
         .replace(/\r\n/g, '\n')
         .split('\n')
-        .map(l => l.trim())
+        .map(l => l.trim().replace(/\s+/g, ''))
         .filter(l => l !== "")
         .join('\n')
         .toLowerCase();

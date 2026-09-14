@@ -55,12 +55,22 @@ export function isPastDeadline(deadline: Date, graceMs: number = SUBMIT_GRACE_MS
   return Date.now() > deadline.getTime() + graceMs;
 }
 
+// Strips ALL whitespace per line, not just leading/trailing: found live the
+// night before the nap_klu_2026 exam -- a correct Python solution to an
+// array-returning question printed `[1, 4]` (Python's default list repr)
+// against an expected output authored as `[1,4]` (no space), and a plain
+// `.trim()` only strips the ends, not that internal comma-space -- a
+// semantically correct answer graded wrong purely on language-idiomatic
+// formatting. Newlines still separate distinct output lines; only
+// within-line whitespace is removed, which is safe since no genuine test
+// case in this app relies on internal spacing to distinguish two different
+// valid answers.
 const robustNormalizeOutput = (s: string) =>
   (s || "")
     .toString()
     .replace(/\r\n/g, "\n")
     .split("\n")
-    .map((l) => l.trim())
+    .map((l) => l.trim().replace(/\s+/g, ""))
     .filter((l) => l !== "")
     .join("\n")
     .toLowerCase();
