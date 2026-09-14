@@ -330,48 +330,61 @@ export default function AdvancedQuestionBank() {
 
       reader.onload = async (event) => {
         const text = event.target?.result as string;
-        // Handle both CRLF and LF line endings
-        const lines = text.split(/\r?\n/).filter(line => line.trim());
-        if (lines.length < 2) {
+
+        // Full-file, quote-aware CSV parser -- record boundaries (newlines)
+        // are only recognized OUTSIDE an open quote, so a field containing an
+        // embedded newline (multi-line question content, or a multi-line
+        // boilerplateCode/testCases snippet -- exactly what every coding
+        // question needs) stays one field instead of fracturing into
+        // multiple garbage rows.
+        //
+        // Found live (2026-09-14, nap_klu_2026 pre-exam upload): the
+        // previous parser did `text.split(/\r?\n/)` BEFORE any quote
+        // tracking, so a single logical row like
+        //   "...\n\nint fun(int n) {\n    if (n <= 1) return 1;\n...}"
+        // got sliced into several independent "rows" at each embedded
+        // newline, each missing its real fields and each defaulting to type
+        // MCQ (since the auto-detect-type check below only fires when
+        // `testCases` parses non-empty) -- exactly why all 3 real CODING
+        // questions in that upload were destroyed into MCQ-shaped fragments
+        // like "int fun(int n) {" and "},[{input:[10" instead of importing.
+        const parseCSV = (input: string): string[][] => {
+          const rows: string[][] = [];
+          let row: string[] = [];
+          let cur = "";
+          let inQuote = false;
+          let i = 0;
+          while (i < input.length) {
+            const char = input[i];
+            if (inQuote) {
+              if (char === '"') {
+                if (input[i + 1] === '"') { cur += '"'; i += 2; continue; }
+                inQuote = false; i++; continue;
+              }
+              cur += char; i++; continue;
+            }
+            if (char === '"') { inQuote = true; i++; continue; }
+            if (char === ',') { row.push(cur.trim()); cur = ""; i++; continue; }
+            if (char === '\r') { i++; continue; } // normalize CRLF -> LF
+            if (char === '\n') { row.push(cur.trim()); cur = ""; rows.push(row); row = []; i++; continue; }
+            cur += char; i++;
+          }
+          if (cur !== "" || row.length > 0) { row.push(cur.trim()); rows.push(row); }
+          // Drop fully-blank trailing/stray rows (e.g. a trailing newline in the file).
+          return rows.filter((r) => r.some((v) => v !== ""));
+        };
+
+        const rows = parseCSV(text);
+        if (rows.length < 2) {
           alert("CSV file appears to be empty or missing headers.");
           setIsUploading(false);
           return;
         }
 
-        const headers = lines[0].split(',').map(h => h.trim());
+        const headers = rows[0];
 
-        // Robust CSV parser that handles quoted cells and escaped quotes ("")
-        const parseCSVLine = (line: string) => {
-          const result = [];
-          let cur = '';
-          let inQuote = false;
-          for (let i = 0; i < line.length; i++) {
-            const char = line[i];
-            
-            if (char === '"') {
-              // Handle escaped quotes: ""
-              if (inQuote && line[i+1] === '"') {
-                cur += '"';
-                i++; // Skip next quote
-              } else {
-                // Toggle quote state
-                inQuote = !inQuote;
-              }
-            } else if (char === ',' && !inQuote) {
-              // Field delimiter
-              result.push(cur.trim());
-              cur = '';
-            } else {
-              cur += char;
-            }
-          }
-          result.push(cur.trim());
-          return result;
-        };
-
-        const questions = lines.slice(1).map(line => {
-          const values = parseCSVLine(line);
-          const q: any = { driveId: selectedDriveId }; 
+        const questions = rows.slice(1).map(values => {
+          const q: any = { driveId: selectedDriveId };
           
           headers.forEach((h, i) => {
              let val = values[i];
