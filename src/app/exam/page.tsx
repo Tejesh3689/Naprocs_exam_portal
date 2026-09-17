@@ -26,6 +26,11 @@ const loginSchema = z.object({
 export default function ExamLoginPage() {
   const router = useRouter();
   const { login, isAuthenticated, setFullscreen, setMediaStream } = useExamStore();
+  // Read directly from the store rather than destructuring `candidate` /
+  // `sessionToken` reactively above -- this page renders the LOGIN form
+  // before a new login, so those two are only ever relevant as a one-shot
+  // read at submit time (see onSubmit below), not something this component
+  // should re-render on.
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isAlreadySubmitted, setIsAlreadySubmitted] = useState(false);
@@ -182,12 +187,28 @@ export default function ExamLoginPage() {
     setIsLoggingIn(true);
     setError(null);
     try {
+      // Reconnect proof: if this browser already holds a persisted token for
+      // the SAME identifier (i.e. this looks like a reload of an in-progress
+      // attempt, not a fresh login), send it along so the server can tell a
+      // genuine same-device reconnect apart from a second device -- see
+      // /api/auth/exam-login/route.ts's `existingToken` handling. A mismatch
+      // or absence is harmless: the server just falls back to the normal
+      // multi-device check.
+      const persisted = useExamStore.getState();
+      const typedIdentifier = values.identifier.trim().toLowerCase();
+      const matchesPersistedCandidate =
+        !!persisted.candidate &&
+        (persisted.candidate.email?.toLowerCase() === typedIdentifier ||
+          persisted.candidate.collegeRollNumber?.toLowerCase() === typedIdentifier);
+      const existingToken = matchesPersistedCandidate ? persisted.sessionToken : undefined;
+
       const res = await fetch("/api/auth/exam-login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           identifier: values.identifier,
           accessPin: values.pin,
+          ...(existingToken ? { existingToken } : {}),
         }),
       });
 
@@ -203,7 +224,7 @@ export default function ExamLoginPage() {
           email: data.email ?? values.identifier,
           pin: values.pin,
           collegeRollNumber: data.collegeRollNumber
-        });
+        }, data.token);
         setWebcamProctoringEnabled(!!data.webcamProctoringEnabled);
         setExamStartAt(data.examStart || null);
       } else if (res.status === 403) {

@@ -15,7 +15,7 @@ export async function POST(req: Request) {
     // src/lib/validators.ts. `email` is still accepted for any older client
     // that hasn't picked up the identifier field yet.
     const identifier = body.identifier ?? body.email;
-    const { accessPin } = body;
+    const { accessPin, existingToken } = body;
 
     if (!identifier || !accessPin) {
       return NextResponse.json({ error: "Email/Roll Number and Access PIN are required" }, { status: 400 });
@@ -147,9 +147,29 @@ export async function POST(req: Request) {
     }
 
     // 3. Multi-Device Security Layer
+    //
+    // `last_active_at` is refreshed both by this route AND by every
+    // /api/exam/sync autosave tick during normal exam-taking -- so a
+    // legitimately reconnecting candidate (page reload after a wifi drop,
+    // laptop sleep, browser crash-recovery) ALWAYS looks "recently active"
+    // here, indistinguishable from a second device, purely because their own
+    // browser was working correctly moments before it reloaded. Found live
+    // post-nap_klu_2026: this was locking out genuine single-device
+    // reconnects with a false "Concurrency Lock" for up to 2 minutes.
+    //
+    // `existingToken` breaks that tie: the exam store persists the token this
+    // route issues to localStorage (see src/store/examStore.ts), so a
+    // reloaded tab on the SAME browser can send it right back. If it matches
+    // this candidate's current_session_id exactly, this genuinely is the
+    // same device proving its own prior identity -- crypto.randomBytes(32)
+    // is not guessable, so this is a real proof, not just a claim -- and the
+    // reconnect is let straight through, skipping the block entirely. A
+    // different device (a friend trying to log in with a shared PIN) has no
+    // way to have this token, so it's still blocked exactly as before.
     const SESSION_EXPIRY_SECONDS = 120; // 2 minutes
+    const isSameDeviceReconnect = !!existingToken && existingToken === candidate.current_session_id;
 
-    if (candidate.last_active_at) {
+    if (!isSameDeviceReconnect && candidate.last_active_at) {
       const timeSinceLastActive = (now.getTime() - new Date(candidate.last_active_at).getTime()) / 1000;
       if (timeSinceLastActive < SESSION_EXPIRY_SECONDS) {
         return NextResponse.json({

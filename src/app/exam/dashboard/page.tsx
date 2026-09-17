@@ -49,6 +49,38 @@ const MONACO_LANGUAGE_MAP: Record<string, string> = {
 // that it did -- previously only a client-side console.warn.
 type SubmitReasonCode = 'MANUAL' | 'TIME_EXPIRED' | 'VIOLATION_HIGH_SEVERITY' | 'VIOLATION_MEDIUM_CAP';
 
+// Shared by the interactive "Run Test Suite" click and the pre-submit
+// re-check, so both compute the exact same weighted score from a raw
+// evaluate-endpoint result set instead of two copies drifting apart.
+function scoreEvaluationResult(testCases: any[], results: any[], previousBest: number) {
+  let passedCount = 0;
+  let passedWeight = 0;
+  let totalWeight = 0;
+  (testCases || []).forEach((tc: any, idx: number) => {
+    const r = results.find((res: any) => res.index === idx);
+    const w = tc.weight || 1;
+    totalWeight += w;
+    if (r?.passed) {
+      passedCount++;
+      passedWeight += w;
+    }
+  });
+  const weightedScore = totalWeight > 0 ? (passedWeight / totalWeight) * 100 : 0;
+  return {
+    testsPassed: passedCount,
+    totalTests: (testCases || []).length,
+    score: Math.max(previousBest, Math.round(weightedScore)),
+    results,
+  };
+}
+
+// Bounded wall-clock ceiling for a single evaluate call made during the
+// pre-submit re-check below -- see handleSubmit's comment for why this
+// exists. 8s comfortably covers a healthy judge response and still leaves
+// enormous headroom under the server's 2-minute submit grace period even if
+// every coding question needs one.
+const PRE_SUBMIT_EVAL_TIMEOUT_MS = 8_000;
+
 const LANGUAGE_STARTERS: Record<string, string> = {
   python: "# Read the input from stdin and print your answer to stdout.\nline = input()\n",
   java: "import java.util.Scanner;\n\npublic class Main {\n    public static void main(String[] args) {\n        Scanner sc = new Scanner(System.in);\n        // Read the input from stdin and print your answer via System.out.println.\n    }\n}\n",
@@ -461,6 +493,14 @@ export default function ExamDashboard() {
       const data = await res.json();
       if (data.success) {
         setTestResults(data.results);
+        // Persist into `responses` too, not just the display-only
+        // `testResults` state -- this is what lets handleSubmit's pre-submit
+        // re-check skip re-running a question the candidate already
+        // verified themselves moments ago (see the comment there), and gives
+        // the server's own authoritative regrade (examTiming.ts) a real
+        // fallback to use if IT hits an infra failure at final-submit time.
+        const previousBest = responses[currentQ._id]?.score || 0;
+        updateResponse(currentQ._id, scoreEvaluationResult(currentQ.testCases || [], data.results, previousBest));
       } else {
         console.error(data.message || "Evaluation Fault");
         // Convert global faults into a UI-friendly error for the first result index
@@ -491,72 +531,75 @@ export default function ExamDashboard() {
     // Clone responses for evaluation
     const finalEvaluatedResponses = { ...responses };
 
-    // 1. Evaluate Coding Questions (Server-Side)
+    // 1. Pre-submit re-check of coding questions -- BEST-EFFORT ONLY.
+    //
+    // The server's own finalizeSession (examTiming.ts) is the authoritative
+    // grader: it re-runs every coding question via Piston itself at
+    // 'high' priority the moment /api/exam/submit is called below, and
+    // already falls back to whatever `testsPassed` is already sitting in
+    // `responses[q.id]` if THAT re-grade hits an infra failure. Since
+    // runLocalTests now persists `testsPassed`/`score` into `responses`
+    // every time a candidate clicks "Run Test Suite" (see above), that
+    // fallback data usually already exists by the time we get here -- this
+    // loop only needs to catch the case where a candidate never manually
+    // tested a question at all before submitting.
+    //
+    // Found live post-nap_klu_2026: this used to be a SEQUENTIAL
+    // `for...await` loop, one HTTP round-trip per coding question, each of
+    // which internally loops over test cases sequentially too. Under Piston
+    // congestion -- guaranteed at the exact moment a whole batch's shared
+    // timer expires together, everyone auto-submitting within the same few
+    // seconds -- a candidate with 3 coding questions could take minutes to
+    // get through this loop, blowing straight through /api/exam/submit's
+    // fixed 2-minute grace window before the real submit call ever went out.
+    // The server then rejected an on-time, legitimate submission as
+    // "Assessment window strictly expired" -- entirely because of this
+    // redundant client-side busywork, not anything the candidate did wrong.
+    //
+    // Fixed by running every question CONCURRENTLY (not sequentially) and
+    // giving each call a hard 8s ceiling -- worst case across any number of
+    // coding questions is now ~8s total, not "N questions x M test cases x
+    // however long the judge's queue happens to be". A timeout or failure
+    // here is not fatal: it just leaves whatever was already in
+    // `responses[q.id]` (a prior manual run, or nothing) untouched, and the
+    // server's own regrade still runs regardless.
     if (!isStageTransition || isViolation) {
-      for (const q of (questions || [])) {
-        if (q.type === 'CODING' && finalEvaluatedResponses[q._id]) {
-          try {
-            const language = finalEvaluatedResponses[q._id].language || 'javascript';
-            const studentCode = finalEvaluatedResponses[q._id].codeStr || (language === 'javascript' ? q.boilerplateCode : LANGUAGE_STARTERS[language]) || "";
+      const codingQuestions = (questions || []).filter((q) => q.type === 'CODING' && finalEvaluatedResponses[q._id]);
+      await Promise.all(codingQuestions.map(async (q) => {
+        try {
+          const language = finalEvaluatedResponses[q._id].language || 'javascript';
+          const studentCode = finalEvaluatedResponses[q._id].codeStr || (language === 'javascript' ? q.boilerplateCode : LANGUAGE_STARTERS[language]) || "";
 
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), PRE_SUBMIT_EVAL_TIMEOUT_MS);
+          let evalData: any;
+          try {
             const res = await fetch("/api/exam/evaluate", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                studentCode,
-                questionId: q._id,
-                language
-              })
+              body: JSON.stringify({ studentCode, questionId: q._id, language }),
+              signal: controller.signal,
             });
-
-            const evalData = await res.json();
-            
-            if (!evalData.success) {
-               finalEvaluatedResponses[q._id] = {
-                  ...finalEvaluatedResponses[q._id],
-                  testsPassed: 0,
-                  totalTests: (q.testCases || []).length,
-                  verdict: evalData.verdict || "FAILED",
-                  evalError: evalData.message
-               };
-               continue;
-            }
-
-            // The server now handles the passed count logic
-            const results = evalData.results;
-            let passedCount = 0;
-            let passedWeight = 0;
-            let totalWeight = 0;
-
-            (q.testCases || []).forEach((tc: any, idx: number) => {
-               const r = results.find((res: any) => res.index === idx);
-               const w = tc.weight || 1;
-               totalWeight += w;
-
-               if (r?.passed) {
-                  passedCount++;
-                  passedWeight += w;
-               }
-            });
-
-            const weightedScore = totalWeight > 0 ? (passedWeight / totalWeight) * 100 : 0;
-            
-            const currentRecord = responses[q._id];
-            const previousBest = currentRecord.score || 0;
-
-            finalEvaluatedResponses[q._id] = {
-              ...finalEvaluatedResponses[q._id],
-              testsPassed: passedCount,
-              totalTests: (q.testCases || []).length,
-              score: Math.max(previousBest, Math.round(weightedScore)),
-              results: results 
-            };
-
-          } catch (e) {
-            console.error("Critical Evaluation Failure:", e);
+            evalData = await res.json();
+          } finally {
+            clearTimeout(timeout);
           }
+
+          if (!evalData.success) return; // leave the existing fallback data (if any) untouched
+
+          const previousBest = responses[q._id]?.score || 0;
+          finalEvaluatedResponses[q._id] = {
+            ...finalEvaluatedResponses[q._id],
+            ...scoreEvaluationResult(q.testCases || [], evalData.results, previousBest),
+          };
+        } catch (e) {
+          // Timed out or the network hiccuped -- not fatal, see comment
+          // above. Whatever was already in finalEvaluatedResponses[q._id]
+          // (from a prior manual "Run Test Suite" click, or nothing) is what
+          // ships, and the server's own authoritative regrade still runs.
+          console.warn(`Pre-submit re-check skipped for question ${q._id} (judge busy or timed out):`, e);
         }
-      }
+      }));
     }
 
     try {
@@ -1174,7 +1217,7 @@ export default function ExamDashboard() {
              </div>
           ) : (
             <Button size="lg" onClick={() => setCurrentQuestionIndex(Math.min(stageQuestions.length - 1, currentQuestionIndex + 1))} className="px-10 h-12 shadow-lg shadow-primary/10">
-              Next Stage <ChevronRight className="h-5 w-5 ml-2" />
+              Next Question <ChevronRight className="h-5 w-5 ml-2" />
             </Button>
           )}
         </footer>
