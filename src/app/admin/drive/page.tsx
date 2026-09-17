@@ -158,11 +158,11 @@ function DriveKanbanBoardInner() {
     doc.setFont("helvetica", "normal");
     doc.text(`Generated exactly at: ${formatToIST(new Date())}`, 14, 30);
 
-    const tableData = list.map(c => [c.name, c.collegeRollNumber, `${c.examScore}%`]);
+    const tableData = list.map(c => [c.name, c.collegeRollNumber, c.email, `${c.examScore}%`]);
 
     autoTable(doc, {
       startY: 35,
-      head: [['Candidate Syntax', 'Roll Designation', 'Initial Evaluation Score']],
+      head: [['Candidate Syntax', 'Roll Designation', 'Registered Email', 'Initial Evaluation Score']],
       body: tableData,
       theme: 'grid',
       headStyles: { fillColor: [46, 204, 113] } // Theme Emerald
