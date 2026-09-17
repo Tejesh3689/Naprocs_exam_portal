@@ -322,12 +322,29 @@ export default function ExamDashboard() {
   // server-issued deadlineTs, so a throttled/backgrounded tab (Chrome can
   // drop a hidden tab's interval to ~1 execution/minute) still snaps to the
   // true remaining time the instant it fires, instead of a drifted count.
+  //
+  // The `visibilitychange` re-tick (2026-09-17 addition, post-nap_klu_2026)
+  // closes most of the gap that throttling still leaves: without it, a
+  // candidate who tabs away right as time expires could sit for up to ~60s
+  // (Chrome's background-tab interval floor) before their own tab even
+  // notices and fires the auto-submit below -- during which their real
+  // session sits IN_PROGRESS, past deadline, un-finalized. The moment the
+  // tab becomes visible again, this recomputes immediately instead of
+  // waiting for the next slow tick. This can't help a tab that's fully
+  // closed/never revisited -- that's what the admin live-monitor page's own
+  // proactive sweep (src/app/api/admin/drives/[id]/live-monitor/route.ts)
+  // now exists to catch instead.
   useEffect(() => {
     if (deadlineTs === null) return;
     const tick = () => setTimeLeft(Math.max(0, Math.floor((deadlineTs - Date.now()) / 1000)));
     tick();
     const timer = setInterval(tick, 1000);
-    return () => clearInterval(timer);
+    const onVisible = () => { if (!document.hidden) tick(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [deadlineTs]);
 
   useEffect(() => {

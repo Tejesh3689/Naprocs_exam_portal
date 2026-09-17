@@ -104,6 +104,34 @@ export async function GET(req: Request) {
     let questionsToDeliver: any[] = [];
 
     if (!session) {
+      // Refuse to start a BRAND-NEW session once the drive's exam window has
+      // closed (2026-09-17 fix, found via a nap_klu_2026 post-mortem). This
+      // route never checked the window itself -- only exam-login did, on the
+      // assumption a candidate always logs in fresh before reaching here.
+      // But a stray extra request from an already-open tab (a reconnect, a
+      // retry, a backgrounded tab catching up) can land here directly, well
+      // after the candidate's REAL session already got swept to COMPLETED
+      // and after the window closed. That used to silently create a second,
+      // born-already-expired session with empty responses -- which then
+      // finalized and overwrote the candidate's real score with a phantom
+      // zero (confirmed: 8+ candidates in that drive had a fully-answered
+      // 33/33 attempt on record, but exam_score: 0, because exactly this
+      // happened). Same 2-minute grace convention as exam-login's own
+      // window-closed check.
+      const WINDOW_GRACE_MS = 2 * 60 * 1000;
+      if (drive.exam_end && Date.now() > new Date(drive.exam_end).getTime() + WINDOW_GRACE_MS) {
+        console.error(
+          `Refused to create a new session for candidate ${candidateId} -- drive ${drive.id} ("${drive.title}") exam window closed at ${drive.exam_end}.`
+        );
+        return NextResponse.json(
+          {
+            error: "The assessment window for your batch has closed. Please contact your administrator.",
+            code: "EXAM_WINDOW_CLOSED",
+          },
+          { status: 403 }
+        );
+      }
+
       // 2.1 Get Global Defaults for Fallback
       const { data: globalSettings } = await supabase.from("settings").select("*").limit(1).maybeSingle();
 
