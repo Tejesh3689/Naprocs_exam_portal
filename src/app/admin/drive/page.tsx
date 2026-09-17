@@ -51,7 +51,7 @@ type Candidate = {
 const COLUMNS: KanbanColumn[] = [
   { id: "col-1", dbStage: "EXAM_COMPLETED", title: "Exam Completed" },
   { id: "col-2", dbStage: "TECH_ROUND", title: "Tech Round", hasExport: true, exportLabel: "Tech Shortlist" },
-  { id: "col-3", dbStage: "HR_ROUND", title: "HR Round" },
+  { id: "col-3", dbStage: "HR_ROUND", title: "HR Round", hasExport: true, exportLabel: "HR Shortlist" },
   { id: "col-4", dbStage: "SELECTED", title: "Selected / Offered", hasExport: true, exportLabel: "Final Offers" },
 ];
 

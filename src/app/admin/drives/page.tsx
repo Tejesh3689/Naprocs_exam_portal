@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState, useEffect } from "react";
 import {
-  Plus, Briefcase, Calendar, Clock, ShieldCheck, Trash2, ArrowRight, ExternalLink, Link as LinkIcon, AlertTriangle, CheckCircle2, Settings2, Video, Trophy, RefreshCw, ArrowDownCircle, ArrowUpCircle, Download
+  Plus, Briefcase, Calendar, Clock, ShieldCheck, Trash2, ArrowRight, ExternalLink, Link as LinkIcon, AlertTriangle, CheckCircle2, Settings2, Video, Trophy, RefreshCw, ArrowDownCircle, ArrowUpCircle, Download, Presentation
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { format } from "date-fns";
@@ -533,6 +533,28 @@ export default function DrivesManagement() {
                             <RefreshCw className="h-3 w-3" /> Recalculate
                           </Button>
                        </div>
+                    </div>
+
+                    <div className="flex items-center justify-between p-3 rounded-xl bg-indigo-500/5 border border-indigo-500/20">
+                       <div className="flex items-center gap-2">
+                          <Presentation className="h-3.5 w-3.5 text-indigo-400" />
+                          <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">HR Round Roster</span>
+                       </div>
+                       <TooltipProvider>
+                         <Tooltip>
+                           <TooltipTrigger>
+                             <Button
+                               size="sm"
+                               variant="outline"
+                               className="h-7 w-7 p-0 border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/10"
+                               onClick={() => window.open(`/api/admin/drives/${drive._id}/hr-round-report`, "_blank")}
+                             >
+                               <Download className="h-3 w-3" />
+                             </Button>
+                           </TooltipTrigger>
+                           <TooltipContent side="top" className="text-xs">Download HR Round List (PDF)</TooltipContent>
+                         </Tooltip>
+                       </TooltipProvider>
                     </div>
                   </CardContent>
 
