@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState, useEffect } from "react";
 import {
-  Plus, Briefcase, Calendar, Clock, ShieldCheck, Trash2, ArrowRight, ExternalLink, Link as LinkIcon, AlertTriangle, CheckCircle2, Settings2, Video, Trophy, RefreshCw, ArrowDownCircle, ArrowUpCircle
+  Plus, Briefcase, Calendar, Clock, ShieldCheck, Trash2, ArrowRight, ExternalLink, Link as LinkIcon, AlertTriangle, CheckCircle2, Settings2, Video, Trophy, RefreshCw, ArrowDownCircle, ArrowUpCircle, Download
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { format } from "date-fns";
@@ -508,14 +508,31 @@ export default function DrivesManagement() {
                           <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Passing Cutoff</span>
                           <span className="text-sm font-bold text-emerald-500">{drive.passingCutoff}%</span>
                        </div>
-                       <Button
-                         size="sm"
-                         variant="outline"
-                         className="h-7 text-[10px] uppercase tracking-widest font-bold gap-1.5 border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/10"
-                         onClick={() => handleOpenRecalculate(drive)}
-                       >
-                         <RefreshCw className="h-3 w-3" /> Recalculate
-                       </Button>
+                       <div className="flex gap-1.5">
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 w-7 p-0 border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/10"
+                                  onClick={() => window.open(`/api/admin/drives/${drive._id}/tech-round-report`, "_blank")}
+                                >
+                                  <Download className="h-3 w-3" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="text-xs">Download Tech Round List (PDF)</TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-[10px] uppercase tracking-widest font-bold gap-1.5 border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/10"
+                            onClick={() => handleOpenRecalculate(drive)}
+                          >
+                            <RefreshCw className="h-3 w-3" /> Recalculate
+                          </Button>
+                       </div>
                     </div>
                   </CardContent>
 
