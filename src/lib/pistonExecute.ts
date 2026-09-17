@@ -38,7 +38,10 @@ const PISTON_API_URL = process.env.PISTON_API_URL || "http://localhost:2000";
 // enforces this cap independently (not coordinated globally) -- fine at
 // today's scale, but revisit (e.g. a shared Redis-backed semaphore) if that
 // changes.
-const MAX_CONCURRENT_PISTON_CALLS = 3;
+// 2026-09-17: droplet upgraded 1vcpu/1gb -> 2vcpu/2gb (s-2vcpu-2gb), Piston's
+// own PISTON_MAX_CONCURRENT_JOBS raised 3 -> 7 to match -- keep these two in
+// sync; this is a client-side mirror of that same box's real capacity.
+const MAX_CONCURRENT_PISTON_CALLS = 7;
 const MAX_QUEUE_WAIT_MS = 25_000;
 let activePistonCalls = 0;
 
