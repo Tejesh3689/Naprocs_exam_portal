@@ -15,11 +15,11 @@ function sanitizeFilenameSegment(input: string | null | undefined, fallback: str
   return cleaned || fallback;
 }
 
-// Deliberately narrow: name + two identifiers + score only. No phone,
+// Deliberately narrow: name + roll number + email only. No score, phone,
 // resume_url, tech/hr notes, cheat_warnings, or anything else from the
 // candidates row -- this report answers "who got selected to Tech Round",
 // nothing more, and is built server-side from a select() this narrow so
-// nothing beyond these four fields is ever even read out of the database.
+// nothing beyond these three fields is ever even read out of the database.
 export async function GET(req: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const unauthorized = await requireAdmin();
@@ -37,10 +37,10 @@ export async function GET(req: Request, context: { params: Promise<{ id: string 
 
     const { data: candidates, error: candError } = await supabase
       .from("candidates")
-      .select("name,email,college_roll_number,exam_score")
+      .select("name,email,college_roll_number")
       .eq("drive_id", driveId)
       .eq("stage", "TECH_ROUND")
-      .order("exam_score", { ascending: false });
+      .order("name", { ascending: true });
     if (candError) throw candError;
 
     const doc = new jsPDF();
@@ -62,11 +62,10 @@ export async function GET(req: Request, context: { params: Promise<{ id: string 
         c.name || "--",
         c.college_roll_number || "--",
         c.email || "--",
-        `${c.exam_score ?? 0}%`,
       ]);
       autoTable(doc, {
         startY: 40,
-        head: [["#", "Name", "College Roll Number", "Email", "Marks"]],
+        head: [["#", "Name", "College Roll Number", "Email"]],
         body: rows,
         theme: "grid",
         headStyles: { fillColor: [46, 204, 113], textColor: [255, 255, 255] },
