@@ -21,7 +21,14 @@ export async function PATCH(req: Request, context: { params: Promise<{ id: strin
     if (scoreArchitecture !== undefined) updatePayload.score_architecture = scoreArchitecture;
     if (scoreLinguistic !== undefined) updatePayload.score_linguistic = scoreLinguistic;
     if (scoreMission !== undefined) updatePayload.score_mission = scoreMission;
-    if (stage !== undefined) updatePayload.stage = stage;
+    // Setting `stage` here always means an admin explicitly clicked "Commit
+    // & Move" or "Discard & Reject" -- mark it MANUAL so a future cutoff
+    // recalculation (see /api/admin/drives/[id]/recalculate-cutoff) never
+    // overrides this candidate's stage again.
+    if (stage !== undefined) {
+      updatePayload.stage = stage;
+      updatePayload.stage_source = "MANUAL";
+    }
 
     if (Object.keys(updatePayload).length === 0) {
       return NextResponse.json({ error: "Evaluation payload empty" }, { status: 400 });

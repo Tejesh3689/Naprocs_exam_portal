@@ -377,9 +377,15 @@ export async function finalizeSession(params: {
   const qualifiesForNextRound = typeof cutoff === "number" && percentileScore >= cutoff;
   const finalStage = qualifiesForNextRound ? "TECH_ROUND" : "EXAM_COMPLETED";
 
+  // stage_source: 'AUTO_CUTOFF' marks this as a score-vs-cutoff decision, not
+  // an admin's manual call -- this is what lets a LATER cutoff change safely
+  // recompute just this candidate's bucket (EXAM_COMPLETED <-> TECH_ROUND)
+  // without ever touching anyone an admin has since made a manual decision
+  // about. See supabase/migrations/011_candidate_stage_source.sql and
+  // src/app/api/admin/drives/[id]/recalculate-cutoff/route.ts.
   const { error: patchError } = await supabase
     .from("candidates")
-    .update({ exam_score: percentileScore, stage: finalStage })
+    .update({ exam_score: percentileScore, stage: finalStage, stage_source: "AUTO_CUTOFF" })
     .eq("id", candidateId);
   if (patchError) throw patchError;
 

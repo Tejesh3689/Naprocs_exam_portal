@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState, useEffect } from "react";
 import {
-  Plus, Briefcase, Calendar, Clock, ShieldCheck, Trash2, ArrowRight, ExternalLink, Link as LinkIcon, AlertTriangle, CheckCircle2, Settings2, Video
+  Plus, Briefcase, Calendar, Clock, ShieldCheck, Trash2, ArrowRight, ExternalLink, Link as LinkIcon, AlertTriangle, CheckCircle2, Settings2, Video, Trophy, RefreshCw, ArrowDownCircle, ArrowUpCircle
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { format } from "date-fns";
@@ -26,6 +26,18 @@ export default function DrivesManagement() {
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [purgeTarget, setPurgeTarget] = useState<string | null>(null);
   const [editingDriveId, setEditingDriveId] = useState<string | null>(null);
+
+  // Recalculate Tech Round Eligibility -- re-evaluates already-finalized
+  // candidates against the drive's CURRENT passing_cutoff (which may have
+  // been edited after the exam). See src/app/api/admin/drives/[id]/
+  // recalculate-cutoff/route.ts for the full safety rules (never touches a
+  // manually-set stage; raising the cutoff only flags candidates for manual
+  // review, never auto-demotes them).
+  const [recalcTarget, setRecalcTarget] = useState<{ id: string; title: string } | null>(null);
+  const [recalcPreview, setRecalcPreview] = useState<any>(null);
+  const [isLoadingRecalcPreview, setIsLoadingRecalcPreview] = useState(false);
+  const [isApplyingRecalc, setIsApplyingRecalc] = useState(false);
+  const [recalcApplyResult, setRecalcApplyResult] = useState<any>(null);
 
   // Form State
   const [formData, setFormData] = useState({
@@ -160,6 +172,39 @@ export default function DrivesManagement() {
       console.error("Purge Exception:", err);
     } finally {
       setIsPurging(false);
+    }
+  };
+
+  const handleOpenRecalculate = async (drive: any) => {
+    setRecalcTarget({ id: drive._id, title: drive.title });
+    setRecalcPreview(null);
+    setRecalcApplyResult(null);
+    setIsLoadingRecalcPreview(true);
+    try {
+      const res = await fetch(`/api/admin/drives/${drive._id}/recalculate-cutoff`);
+      const data = await res.json();
+      if (data.success) setRecalcPreview(data);
+    } catch (err) {
+      console.error("Recalculate preview fetch failure:", err);
+    } finally {
+      setIsLoadingRecalcPreview(false);
+    }
+  };
+
+  const handleApplyRecalculate = async () => {
+    if (!recalcTarget) return;
+    setIsApplyingRecalc(true);
+    try {
+      const res = await fetch(`/api/admin/drives/${recalcTarget.id}/recalculate-cutoff`, { method: "POST" });
+      const data = await res.json();
+      if (data.success) {
+        setRecalcApplyResult(data);
+        setRecalcPreview(null); // preview is now stale -- the result view replaces it
+      }
+    } catch (err) {
+      console.error("Recalculate apply failure:", err);
+    } finally {
+      setIsApplyingRecalc(false);
     }
   };
 
@@ -300,13 +345,30 @@ export default function DrivesManagement() {
                  </div>
                  <div className="space-y-2">
                     <Label>Coding Target</Label>
-                    <Input 
-                      type="number" 
-                      value={formData.codingCount} 
+                    <Input
+                      type="number"
+                      value={formData.codingCount}
                       onChange={e => setFormData({...formData, codingCount: parseInt(e.target.value)})}
                       className="bg-input/20 h-11"
                     />
                  </div>
+              </div>
+
+              <div className="space-y-2">
+                 <Label className="flex items-center gap-2 text-primary"><Trophy className="h-4 w-4" /> Passing Cutoff (%)</Label>
+                 <Input
+                   type="number"
+                   min={0}
+                   max={100}
+                   value={formData.passingCutoff}
+                   onChange={e => setFormData({...formData, passingCutoff: parseInt(e.target.value)})}
+                   className="bg-input/20 h-11"
+                 />
+                 {editingDriveId && (
+                   <p className="text-[10px] text-muted-foreground font-medium leading-relaxed">
+                     Changing this alone does nothing to existing candidates -- use &quot;Recalculate Tech Round Eligibility&quot; on the pipeline card after saving to actually re-evaluate them against the new value.
+                   </p>
+                 )}
               </div>
 
               <div className="flex items-center justify-between p-4 rounded-2xl bg-background/40 border border-border/20">
@@ -439,6 +501,22 @@ export default function DrivesManagement() {
                            </p>
                         </div>
                     </div>
+
+                    <div className="flex items-center justify-between p-3 rounded-xl bg-emerald-500/5 border border-emerald-500/20">
+                       <div className="flex items-center gap-2">
+                          <Trophy className="h-3.5 w-3.5 text-emerald-500" />
+                          <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Passing Cutoff</span>
+                          <span className="text-sm font-bold text-emerald-500">{drive.passingCutoff}%</span>
+                       </div>
+                       <Button
+                         size="sm"
+                         variant="outline"
+                         className="h-7 text-[10px] uppercase tracking-widest font-bold gap-1.5 border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/10"
+                         onClick={() => handleOpenRecalculate(drive)}
+                       >
+                         <RefreshCw className="h-3 w-3" /> Recalculate
+                       </Button>
+                    </div>
                   </CardContent>
 
                   <CardFooter className="pt-2 pb-6 flex gap-2">
@@ -486,6 +564,115 @@ export default function DrivesManagement() {
                   {isPurging ? "Purging Matrix..." : "Purge Everything"}
                </Button>
             </DialogFooter>
+         </DialogContent>
+      </Dialog>
+      {/* Recalculate Tech Round Eligibility Dialog */}
+      <Dialog open={!!recalcTarget} onOpenChange={(o) => { if (!o) { setRecalcTarget(null); setRecalcPreview(null); setRecalcApplyResult(null); } }}>
+         <DialogContent className="max-w-lg bg-card/95 backdrop-blur-xl border-border/40 max-h-[85vh] overflow-y-auto custom-scrollbar">
+            <DialogHeader>
+               <DialogTitle className="text-xl font-bold flex items-center gap-2">
+                  <Trophy className="h-5 w-5 text-emerald-500" /> Recalculate Tech Round Eligibility
+               </DialogTitle>
+               <DialogDescription className="text-sm">
+                  {recalcTarget?.title}
+               </DialogDescription>
+            </DialogHeader>
+
+            {isLoadingRecalcPreview ? (
+               <div className="py-10 text-center text-sm text-muted-foreground">Comparing candidates against the current cutoff...</div>
+            ) : recalcApplyResult ? (
+               <div className="space-y-4 py-2">
+                  <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center gap-3">
+                     <CheckCircle2 className="h-5 w-5 text-emerald-500 shrink-0" />
+                     <p className="text-sm font-medium">{recalcApplyResult.message}</p>
+                  </div>
+                  {recalcApplyResult.flaggedForReview?.length > 0 && (
+                     <div className="space-y-2">
+                        <p className="text-xs font-bold uppercase tracking-widest text-amber-500 flex items-center gap-1.5">
+                           <ArrowDownCircle className="h-3.5 w-3.5" /> Still needs manual review ({recalcApplyResult.flaggedForReview.length})
+                        </p>
+                        <p className="text-[11px] text-muted-foreground leading-relaxed">
+                           These candidates are in Tech Round but no longer meet the {recalcApplyResult.cutoff}% cutoff. They were left untouched -- decide case-by-case from the Live Monitoring board.
+                        </p>
+                        <div className="max-h-40 overflow-y-auto space-y-1.5 custom-scrollbar">
+                           {recalcApplyResult.flaggedForReview.map((c: any) => (
+                              <div key={c._id} className="flex justify-between items-center text-xs p-2 rounded-lg bg-amber-500/5 border border-amber-500/20">
+                                 <span className="font-medium">{c.name} <span className="text-muted-foreground font-mono">({c.collegeRollNumber})</span></span>
+                                 <span className="font-bold text-amber-500">{c.examScore}%</span>
+                              </div>
+                           ))}
+                        </div>
+                     </div>
+                  )}
+                  <DialogFooter className="pt-2">
+                     <Button className="w-full h-10" onClick={() => { setRecalcTarget(null); setRecalcApplyResult(null); }}>Done</Button>
+                  </DialogFooter>
+               </div>
+            ) : recalcPreview ? (
+               <div className="space-y-4 py-2">
+                  <p className="text-xs text-muted-foreground">
+                     Current cutoff: <span className="font-bold text-foreground">{recalcPreview.cutoff}%</span>. Only candidates whose stage was set automatically by this cutoff check are considered -- anyone manually moved by an admin is never touched.
+                  </p>
+
+                  <div className="space-y-2">
+                     <p className="text-xs font-bold uppercase tracking-widest text-emerald-500 flex items-center gap-1.5">
+                        <ArrowUpCircle className="h-3.5 w-3.5" /> Will move to Tech Round ({recalcPreview.newlyQualifying.length})
+                     </p>
+                     {recalcPreview.newlyQualifying.length === 0 ? (
+                        <p className="text-[11px] text-muted-foreground italic">No candidates newly qualify.</p>
+                     ) : (
+                        <div className="max-h-32 overflow-y-auto space-y-1.5 custom-scrollbar">
+                           {recalcPreview.newlyQualifying.map((c: any) => (
+                              <div key={c._id} className="flex justify-between items-center text-xs p-2 rounded-lg bg-emerald-500/5 border border-emerald-500/20">
+                                 <span className="font-medium">{c.name} <span className="text-muted-foreground font-mono">({c.collegeRollNumber})</span></span>
+                                 <span className="font-bold text-emerald-500">{c.examScore}%</span>
+                              </div>
+                           ))}
+                        </div>
+                     )}
+                  </div>
+
+                  <div className="space-y-2">
+                     <p className="text-xs font-bold uppercase tracking-widest text-amber-500 flex items-center gap-1.5">
+                        <ArrowDownCircle className="h-3.5 w-3.5" /> No longer meets cutoff -- needs manual review ({recalcPreview.noLongerQualifying.length})
+                     </p>
+                     {recalcPreview.noLongerQualifying.length === 0 ? (
+                        <p className="text-[11px] text-muted-foreground italic">Nobody currently in Tech Round falls below the new cutoff.</p>
+                     ) : (
+                        <>
+                           <p className="text-[11px] text-muted-foreground leading-relaxed">
+                              These will stay in Tech Round -- raising the cutoff never auto-removes anyone. Review and move them by hand if needed.
+                           </p>
+                           <div className="max-h-32 overflow-y-auto space-y-1.5 custom-scrollbar">
+                              {recalcPreview.noLongerQualifying.map((c: any) => (
+                                 <div key={c._id} className="flex justify-between items-center text-xs p-2 rounded-lg bg-amber-500/5 border border-amber-500/20">
+                                    <span className="font-medium">{c.name} <span className="text-muted-foreground font-mono">({c.collegeRollNumber})</span></span>
+                                    <span className="font-bold text-amber-500">{c.examScore}%</span>
+                                 </div>
+                              ))}
+                           </div>
+                        </>
+                     )}
+                  </div>
+
+                  <p className="text-[10px] text-muted-foreground italic">
+                     {recalcPreview.unaffectedCount} unaffected, {recalcPreview.manualExcludedCount} excluded (manually set by an admin).
+                  </p>
+
+                  <DialogFooter className="pt-2 gap-2">
+                     <Button variant="outline" className="flex-1 h-10 border-border/50" onClick={() => setRecalcTarget(null)}>Cancel</Button>
+                     <Button
+                        className="flex-1 h-10 bg-emerald-500 hover:bg-emerald-600 text-white font-semibold"
+                        onClick={handleApplyRecalculate}
+                        disabled={isApplyingRecalc || recalcPreview.newlyQualifying.length === 0}
+                     >
+                        {isApplyingRecalc ? "Applying..." : `Apply (${recalcPreview.newlyQualifying.length})`}
+                     </Button>
+                  </DialogFooter>
+               </div>
+            ) : (
+               <div className="py-10 text-center text-sm text-muted-foreground">Failed to load preview. Close and try again.</div>
+            )}
          </DialogContent>
       </Dialog>
     </div>

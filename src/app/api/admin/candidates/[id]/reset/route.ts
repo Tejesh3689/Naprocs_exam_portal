@@ -43,6 +43,11 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
         last_reset_at: new Date().toISOString(),
         last_reset_reason: reason ?? null,
         last_reset_by: resetBy ?? null,
+        // Clear the stage-provenance flag too -- a fresh attempt hasn't been
+        // decided yet by anyone, auto or manual. finalizeSession sets it
+        // back to AUTO_CUTOFF the next time this candidate completes.
+        stage_source: null,
+        stage_recalculated_at: null,
       })
       .eq('id', id)
       .select()

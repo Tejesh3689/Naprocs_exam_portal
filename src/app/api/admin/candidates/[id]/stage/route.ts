@@ -17,9 +17,12 @@ export async function PATCH(req: Request, context: { params: Promise<{ id: strin
       return NextResponse.json({ error: "Invalid stage descriptor mapped" }, { status: 400 });
     }
 
+    // A drag in the Kanban board is an explicit human decision -- mark it
+    // MANUAL so a future cutoff recalculation (see
+    // /api/admin/drives/[id]/recalculate-cutoff) never overrides it.
     const { data: updatedCandidate, error } = await supabase
       .from("candidates")
-      .update({ stage })
+      .update({ stage, stage_source: "MANUAL" })
       .eq("id", id)
       .select()
       .maybeSingle();
