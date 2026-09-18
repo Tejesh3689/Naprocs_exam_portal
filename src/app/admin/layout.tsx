@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, Library, Activity, Settings, LogOut, Users, Briefcase } from 'lucide-react';
+import { LayoutDashboard, Library, Activity, Settings, LogOut, Users, Briefcase, KeyRound } from 'lucide-react';
 import { ReactNode } from 'react';
 
 export default function AdminLayout({ children }: { children: ReactNode }) {
@@ -74,11 +74,17 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
           >
             <Library className="h-4 w-4" /> Question Bank
           </Link>
-          <Link 
-            href="/admin/settings" 
+          <Link
+            href="/admin/settings"
             className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${isActive('/admin/settings') ? 'bg-primary/10 text-primary hover:bg-primary/20' : 'hover:bg-muted/50 text-foreground/80 hover:text-foreground'}`}
           >
             <Settings className="h-4 w-4" /> Settings
+          </Link>
+          <Link
+            href="/admin/pin-lookup"
+            className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${isActive('/admin/pin-lookup') ? 'bg-primary/10 text-primary hover:bg-primary/20' : 'hover:bg-muted/50 text-foreground/80 hover:text-foreground'}`}
+          >
+            <KeyRound className="h-4 w-4" /> PIN Lookup
           </Link>
         </nav>
         
