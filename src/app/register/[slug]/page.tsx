@@ -109,10 +109,30 @@ export default function RegisterPage() {
         formData.append("resume", reviewData.resume[0]);
       }
 
-      const res = await fetch("/api/register", {
-        method: "POST",
-        body: formData, // No Content-Type header needed for FormData; the browser sets it with boundaries
-      });
+      // 2026-09-22 (VVIT last-minute registration rush): a resume PDF is the
+      // heaviest thing this form ever sends, and it's uploaded over whatever
+      // connection the candidate happens to have -- campus wifi shared by
+      // hundreds of people all registering right before the deadline, or
+      // patchy mobile data. Without a bound, a genuinely stalled (not
+      // failed, just very slow) upload could sit on "Registering..."
+      // indefinitely rather than ever resolving to a retry-able error --
+      // exactly the kind of hang a panicking student an hour before a
+      // deadline has no way to tell apart from "it's still working, wait."
+      // 45s is generous for a <=5MB PDF on a genuinely bad connection while
+      // still giving a bounded, actionable failure instead of an open-ended
+      // spinner.
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 45_000);
+      let res: Response;
+      try {
+        res = await fetch("/api/register", {
+          method: "POST",
+          body: formData, // No Content-Type header needed for FormData; the browser sets it with boundaries
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
 
       const data = await res.json();
 
@@ -121,8 +141,16 @@ export default function RegisterPage() {
       } else {
         setReviewError(data.error || "Registration failed");
       }
-    } catch (err) {
-      setReviewError("Network connection error");
+    } catch (err: any) {
+      // AbortError specifically means OUR timeout fired (see above), not a
+      // hard network failure -- worth telling the candidate that directly,
+      // since "try again" is genuinely the right move and their data/file
+      // selection is still intact on this screen either way.
+      if (err?.name === "AbortError") {
+        setReviewError("Upload timed out -- this usually means a slow connection. Please try again, ideally on wifi. Your details are still filled in, no need to start over.");
+      } else {
+        setReviewError("Network connection error. Please check your connection and try again -- your details are still filled in, no need to start over.");
+      }
     } finally {
       setIsSubmitting(false);
     }
