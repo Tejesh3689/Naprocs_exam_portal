@@ -56,6 +56,13 @@ async function curlRequest(method, urlPath, body) {
     let json = {};
     try { json = JSON.parse(rawBody); } catch { /* non-JSON response */ }
     return { status, body: json };
+  } catch (e) {
+    // curl itself failing (exit 28 = --max-time exceeded, or any other
+    // transport-level failure) must never crash the whole batch -- this is
+    // exactly the "judge busy / connection dropped" case a real candidate's
+    // browser would hit too. Surface it as a normal failed-request result
+    // instead of an uncaught exception killing every other in-flight call.
+    return { status: 0, body: { error: `curl transport failure: ${e.message?.split("\n")[0] || e.code}` } };
   } finally {
     if (tmpFile) fs.unlink(tmpFile, () => {});
   }
@@ -137,6 +144,21 @@ const CORRECT = {
     [JOBSCHED.id]: "function maxProfit(input) {\n  const jobs = input.slice().sort((a,b)=>a[1]-b[1]);\n  const n = jobs.length;\n  const ends = jobs.map(j=>j[1]);\n  const dp = new Array(n).fill(0);\n  function findLast(start, hiIdx) {\n    let lo=0, hi=hiIdx, res=-1;\n    while (lo<=hi) {\n      const mid=(lo+hi)>>1;\n      if (ends[mid]<=start) { res=mid; lo=mid+1; } else hi=mid-1;\n    }\n    return res;\n  }\n  for (let i=0;i<n;i++){\n    const [start,end,profit]=jobs[i];\n    const j = findLast(start, i-1);\n    const incl = profit + (j!==-1?dp[j]:0);\n    const excl = i>0?dp[i-1]:0;\n    dp[i]=Math.max(incl,excl);\n  }\n  return n>0?dp[n-1]:0;\n}",
     [SHORTPATH.id]: "function restrictedShortestPath(input) {\n  const { n, edges, source, destination, maxDelay } = input;\n  const adj = Array.from({length:n},()=>[]);\n  for (const [u,v,cost,delay] of edges) adj[u].push([v,cost,delay]);\n  let heap = [[0, source, 0]];\n  const seen = new Set();\n  while (heap.length) {\n    heap.sort((a,b)=>a[0]-b[0]);\n    const [cost, node, delay] = heap.shift();\n    if (node === destination) return cost;\n    const key = node+\",\"+delay;\n    if (seen.has(key)) continue;\n    seen.add(key);\n    for (const [v,ecost,edelay] of adj[node]) {\n      const ndelay = delay+edelay;\n      if (ndelay <= maxDelay) heap.push([cost+ecost, v, ndelay]);\n    }\n  }\n  return -1;\n}",
   },
+  // Compiled-language candidates: verified-correct solution for JOBSCHED
+  // only (mirrors realistic behavior -- attempt the easier of two hard
+  // problems in a language with more setup overhead, leave the other
+  // blank). This is what actually exercises the known compiled-language
+  // concurrency limits under real load, which the earlier python/js-only
+  // readiness run never touched.
+  java: {
+    [JOBSCHED.id]: "import java.util.*;\npublic class Main {\n  public static void main(String[] args) {\n    Scanner sc = new Scanner(System.in);\n    String line = sc.nextLine().trim();\n    line = line.substring(1, line.length()-1);\n    List<int[]> jobs = new ArrayList<>();\n    String[] parts = line.split(\"\\\\],\\\\[\");\n    for (String p : parts) {\n      String clean = p.replace(\"[\", \"\").replace(\"]\", \"\");\n      String[] nums = clean.split(\",\");\n      int start = Integer.parseInt(nums[0].trim());\n      int end = Integer.parseInt(nums[1].trim());\n      int profit = Integer.parseInt(nums[2].trim());\n      jobs.add(new int[]{start, end, profit});\n    }\n    jobs.sort((a,b) -> a[1]-b[1]);\n    int n = jobs.size();\n    int[] ends = new int[n];\n    for (int i=0;i<n;i++) ends[i]=jobs.get(i)[1];\n    long[] dp = new long[n];\n    for (int i=0;i<n;i++) {\n      int start = jobs.get(i)[0], profit = jobs.get(i)[2];\n      int lo=0, hi=i-1, j=-1;\n      while (lo<=hi) {\n        int mid=(lo+hi)/2;\n        if (ends[mid]<=start) { j=mid; lo=mid+1; } else hi=mid-1;\n      }\n      long incl = profit + (j!=-1?dp[j]:0);\n      long excl = i>0?dp[i-1]:0;\n      dp[i] = Math.max(incl, excl);\n    }\n    System.out.println(n>0?dp[n-1]:0);\n  }\n}\n",
+  },
+  c: {
+    [JOBSCHED.id]: "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <ctype.h>\n\ntypedef struct { long start,end,profit; } Job;\n\nint cmp(const void* a, const void* b) {\n  long d = ((Job*)a)->end - ((Job*)b)->end;\n  return d < 0 ? -1 : (d > 0 ? 1 : 0);\n}\n\nint main(void) {\n  char buf[8192];\n  fgets(buf, sizeof(buf), stdin);\n  Job jobs[2000];\n  int n = 0;\n  char* p = buf;\n  while (*p) {\n    if (isdigit((unsigned char)*p) || *p=='-') {\n      long a,b,c;\n      int consumed=0;\n      if (sscanf(p, \"%ld,%ld,%ld%n\", &a,&b,&c,&consumed) == 3) {\n        jobs[n].start=a; jobs[n].end=b; jobs[n].profit=c;\n        n++;\n        p += consumed;\n        continue;\n      }\n    }\n    p++;\n  }\n  qsort(jobs, n, sizeof(Job), cmp);\n  long dp[2000];\n  long ends[2000];\n  for (int i=0;i<n;i++) ends[i]=jobs[i].end;\n  for (int i=0;i<n;i++) {\n    int lo=0,hi=i-1,j=-1;\n    while (lo<=hi) {\n      int mid=(lo+hi)/2;\n      if (ends[mid]<=jobs[i].start) { j=mid; lo=mid+1; } else hi=mid-1;\n    }\n    long incl = jobs[i].profit + (j!=-1?dp[j]:0);\n    long excl = i>0?dp[i-1]:0;\n    dp[i] = incl>excl?incl:excl;\n  }\n  printf(\"%ld\\n\", n>0?dp[n-1]:0);\n  return 0;\n}\n",
+  },
+  cpp: {
+    [JOBSCHED.id]: "#include <bits/stdc++.h>\nusing namespace std;\nint main() {\n  string line; getline(cin, line);\n  vector<array<long,3>> jobs;\n  int i = 0, n = line.size();\n  while (i < n) {\n    if (isdigit((unsigned char)line[i]) || line[i]=='-') {\n      long a,b,c;\n      int consumed=0;\n      if (sscanf(line.c_str()+i, \"%ld,%ld,%ld%n\", &a,&b,&c,&consumed) == 3) {\n        jobs.push_back({a,b,c});\n        i += consumed;\n        continue;\n      }\n    }\n    i++;\n  }\n  sort(jobs.begin(), jobs.end(), [](const array<long,3>&a, const array<long,3>&b){ return a[1]<b[1]; });\n  int m = jobs.size();\n  vector<long> dp(m,0), ends(m);\n  for (int k=0;k<m;k++) ends[k]=jobs[k][1];\n  for (int k=0;k<m;k++) {\n    long start=jobs[k][0], profit=jobs[k][2];\n    int lo=0,hi=k-1,j=-1;\n    while (lo<=hi) {\n      int mid=(lo+hi)/2;\n      if (ends[mid]<=start) { j=mid; lo=mid+1; } else hi=mid-1;\n    }\n    long incl = profit + (j!=-1?dp[j]:0);\n    long excl = k>0?dp[k-1]:0;\n    dp[k] = max(incl,excl);\n  }\n  cout << (m>0?dp[m-1]:0) << endl;\n  return 0;\n}\n",
+  },
 };
 const WRONG_LOGIC_JOBSCHED_PY = "import ast\njobs = ast.literal_eval(input().strip())\njobs.sort(key=lambda j: j[1])\nn = len(jobs)\nends = [j[1] for j in jobs]\ndp = [0]*n\nfor i in range(n):\n    start, end, profit = jobs[i]\n    lo, hi, j = 0, i-1, -1\n    while lo <= hi:\n        mid = (lo+hi)//2\n        if ends[mid] < start:\n            j = mid\n            lo = mid+1\n        else:\n            hi = mid-1\n    incl = profit + (dp[j] if j != -1 else 0)\n    excl = dp[i-1] if i > 0 else 0\n    dp[i] = max(incl, excl)\nprint(dp[-1] if n>0 else 0)\n"; // bug: strict < instead of <=, mishandles touching intervals
 const BROKEN = {
@@ -148,10 +170,11 @@ const BROKEN = {
 
 console.log(`\nSolutions verified against every test case (including hidden) before this run. Job-scheduling=${JOBSCHED.id} Shortest-path=${SHORTPATH.id}`);
 
-// ---------- Step 2: seed 60 candidates ----------
-mark("Step 2: seeding 60 candidates");
+// ---------- Step 2: seed N candidates (default 60, override via argv[3]) ----------
+const N = parseInt(process.argv[3] || "60", 10);
+mark(`Step 2: seeding ${N} candidates`);
 const FIXED_PIN = "123456";
-const candidateInserts = Array.from({ length: 60 }, (_, i) => ({
+const candidateInserts = Array.from({ length: N }, (_, i) => ({
   drive_id: drive.id,
   name: `VVIT Readiness Candidate ${i}`,
   email: `vvit.readiness.${runTag}.${i}@naprocs-loadtest.invalid`,
@@ -160,28 +183,62 @@ const candidateInserts = Array.from({ length: 60 }, (_, i) => ({
   access_pin: FIXED_PIN,
   stage: "EXAM_PENDING",
 }));
-const { data: insertedCandidates, error: candInsertErr } = await supabase.from("candidates").insert(candidateInserts).select("id,email,college_roll_number");
-if (candInsertErr) throw candInsertErr;
+const CHUNK = 200;
+const insertedCandidates = [];
+for (let i = 0; i < candidateInserts.length; i += CHUNK) {
+  const chunk = candidateInserts.slice(i, i + CHUNK);
+  const { data, error: candInsertErr } = await supabase.from("candidates").insert(chunk).select("id,email,college_roll_number");
+  if (candInsertErr) throw candInsertErr;
+  insertedCandidates.push(...data);
+}
 console.log(`  Inserted ${insertedCandidates.length} candidates.`);
 
+// Cohort proportions scaled off the same ratios as the original 60-candidate
+// run (A=67%, B=13%, C=10%, D=5%, E=5%).
+const cohortBounds = {
+  A: Math.round(N * 0.667),
+  B: Math.round(N * 0.133),
+  C: Math.round(N * 0.1),
+  D: Math.round(N * 0.05),
+};
+const aEnd = cohortBounds.A;
+const bEnd = aEnd + cohortBounds.B;
+const cEnd = bEnd + cohortBounds.C;
+const dEnd = cEnd + cohortBounds.D;
 const candidates = insertedCandidates.map((c, i) => {
   let cohort;
-  if (i < 40) cohort = "A";
-  else if (i < 48) cohort = "B";
-  else if (i < 54) cohort = "C";
-  else if (i < 57) cohort = "D";
+  if (i < aEnd) cohort = "A";
+  else if (i < bEnd) cohort = "B";
+  else if (i < cEnd) cohort = "C";
+  else if (i < dEnd) cohort = "D";
   else cohort = "E";
   return { candidateId: c.id, identifier: c.college_roll_number, accessPin: FIXED_PIN, cohort, idx: i };
 });
+// Realistic language mix for cohort A, including compiled languages this
+// time (java/c/cpp) -- the earlier 60-candidate run only used python/js,
+// which never exercised the compiled-language concurrency limits already
+// known from the dedicated Piston stress test earlier this project.
+const A_LANG_WEIGHTS = [
+  ["python", 0.45],
+  ["javascript", 0.25],
+  ["java", 0.15],
+  ["cpp", 0.1],
+  ["c", 0.05],
+];
 const A_LANGS = [];
-for (let i = 0; i < 25; i++) A_LANGS.push("python");
-for (let i = 0; i < 15; i++) A_LANGS.push("javascript");
+for (const [lang, weight] of A_LANG_WEIGHTS) {
+  const count = Math.round(cohortBounds.A * weight);
+  for (let i = 0; i < count; i++) A_LANGS.push(lang);
+}
+while (A_LANGS.length < cohortBounds.A) A_LANGS.push("python");
 let aCounter = 0;
 for (const c of candidates) {
-  if (c.cohort === "A") { c.language = A_LANGS[aCounter]; aCounter++; }
+  if (c.cohort === "A") { c.language = A_LANGS[aCounter % A_LANGS.length]; aCounter++; }
   else c.language = "python";
 }
 const brokenVariants = Object.keys(BROKEN);
+console.log(`  Cohorts: A=${cohortBounds.A} B=${cohortBounds.B} C=${cohortBounds.C} D=${cohortBounds.D} E=${N - dEnd}`);
+console.log(`  Cohort A language mix:`, Object.fromEntries(A_LANG_WEIGHTS.map(([l]) => [l, A_LANGS.filter((x) => x === l).length])));
 
 saveState({ runTag, driveId: drive.id, codingQuestionIds: [JOBSCHED.id, SHORTPATH.id] });
 
