@@ -126,7 +126,17 @@ export default function AdvancedQuestionBank() {
       const data = await res.json();
       if (data.success && data.drives.length > 0) {
         setDrives(data.drives);
-        setSelectedDriveId(data.drives[0]._id);
+        // Deliberately NOT auto-selecting drives[0] here anymore. This used
+        // to silently pre-select whichever drive was created most recently
+        // (the API orders by created_at descending) -- so opening this page
+        // and uploading a CSV without consciously re-checking the dropdown
+        // would commit questions to whatever drive happened to be newest,
+        // not necessarily the one intended. That's exactly how the
+        // 2026-09-09 SVCE incident happened (28 questions to the wrong
+        // sibling drive), and it happened again 2026-09-22 with two VVIT
+        // batches created minutes apart. Forcing an explicit pick here, and
+        // a confirmation at actual upload time below, closes both halves of
+        // the same gap the exam-time label alone didn't.
       }
     } catch (e) {
       console.error("Drives fetch failure", e);
@@ -324,6 +334,21 @@ export default function AdvancedQuestionBank() {
 
     const file = e.target.files?.[0];
     if (!file) return;
+
+    // Explicit last-check confirmation naming the exact target drive --
+    // no default selection exists anymore (see fetchDrives), but this is
+    // the second half of the fix: even a deliberately-selected drive is one
+    // easy misclick away from being the wrong sibling batch when several
+    // exist with similar names/times. This is the moment that would have
+    // caught both the 2026-09-09 SVCE incident and the 2026-09-22 VVIT one.
+    const targetDrive = drives.find((d) => d._id === selectedDriveId);
+    const targetLabel = targetDrive
+      ? `"${targetDrive.title}"${targetDrive.examStart ? ` (${formatToIST(targetDrive.examStart)})` : ""}`
+      : "the selected drive";
+    if (!window.confirm(`Upload "${file.name}" to ${targetLabel}?\n\nDouble-check this is the exact intended batch before continuing.`)) {
+      e.target.value = "";
+      return;
+    }
 
     setIsUploading(true);
     const reader = new FileReader();
